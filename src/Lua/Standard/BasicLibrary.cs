@@ -227,6 +227,23 @@ public sealed class BasicLibrary
         {
             if (arg0.TryRead<string>(out var str))
             {
+                // Binary chunks start with the Lua signature byte 0x1B ('\e'), encoded here as
+                // the corresponding char in 0..255 (consistent with how string.dump returns bytes).
+                var isBinary = str.Length > 0 && str[0] == '\x1B';
+                if (isBinary)
+                {
+                    if (!mode.Contains('b'))
+                    {
+                        throw new Exception("attempt to load a binary chunk (mode is 't')");
+                    }
+
+                    var bytes = new byte[str.Length];
+                    for (var i = 0; i < str.Length; i++) bytes[i] = (byte)str[i];
+                    var closureB = context.State.Load(bytes, name, mode, null);
+                    if (hasEnvironment) closureB.SetEnvironment(environment);
+                    return new(context.Return(closureB));
+                }
+
                 if (!mode.Contains('t'))
                 {
                     throw new Exception("attempt to load a text chunk (mode is 'b')");

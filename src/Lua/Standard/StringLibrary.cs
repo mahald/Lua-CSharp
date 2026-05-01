@@ -1,6 +1,8 @@
+using System.Buffers;
 using System.Text;
 using System.Globalization;
 using System.Diagnostics;
+using Lua.CodeAnalysis.Compilation;
 using Lua.Internal;
 using Lua.Runtime;
 using Lua.Standard.Internal;
@@ -350,7 +352,26 @@ public sealed class StringLibrary
 
     public ValueTask<int> Dump(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
     {
-        throw new NotSupportedException("stirng.dump is not supported");
+        // Lua 5.3 string.dump(function [, strip]) — return a binary representation of the function.
+        // Only Lua-defined functions (LuaClosure) can be dumped; C# closures cannot be serialized.
+        var fn = context.GetArgument<LuaFunction>(0);
+        if (fn is not LuaClosure closure)
+        {
+            throw new LuaRuntimeException(context.State, "unable to dump given function");
+        }
+        // Spec note: closures with upvalues that aren't representable in a chunk dump aren't
+        // representable here either. We don't currently honor the optional `strip` second arg.
+
+        var buffer = new ArrayBufferWriter<byte>();
+        var dumper = new DumpState(buffer, reversedEndian: false);
+        dumper.Dump(closure.Proto);
+
+        // Encode the bytes into a Lua string (chars in 0..255) — same convention used by
+        // string.pack and the utf8 library here.
+        var bytes = buffer.WrittenSpan;
+        var chars = new char[bytes.Length];
+        for (var i = 0; i < bytes.Length; i++) chars[i] = (char)bytes[i];
+        return new(context.Return(new string(chars)));
     }
 
     public ValueTask<int> Find(LuaFunctionExecutionContext context, CancellationToken cancellationToken)

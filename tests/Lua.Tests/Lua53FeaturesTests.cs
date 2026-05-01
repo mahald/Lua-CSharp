@@ -423,4 +423,90 @@ public class Lua53FeaturesTests
         Assert.That(r[0].Read<string>(), Is.EqualTo("nil"),
             $"{name} must not be present in Lua 5.3 (it was removed).");
     }
+
+    // --- string.dump / load(binary) round-trip --------------------------------------
+
+    [Test]
+    public async Task StringDump_RoundTripsClosure()
+    {
+        var r = await CreateState().DoStringAsync(@"
+            local function add(a, b) return a + b end
+            local f = load(string.dump(add))
+            return f(3, 4), type(f)
+        ");
+        Assert.That(r[0].Read<long>(), Is.EqualTo(7L));
+        Assert.That(r[1].Read<string>(), Is.EqualTo("function"));
+    }
+
+    [Test]
+    public async Task StringDump_ProducesBinaryWithLuaSignature()
+    {
+        var r = await CreateState().DoStringAsync(@"
+            local s = string.dump(function() return 1 end)
+            return s:byte(1)
+        ");
+        // First byte of a Lua binary chunk is 0x1B ('\e').
+        Assert.That(r[0].Read<long>(), Is.EqualTo(0x1BL));
+    }
+
+    [Test]
+    public void StringDump_OnCSharpFunction_Throws()
+    {
+        var s = CreateState();
+        // print is a C-side function and cannot be dumped.
+        Assert.ThrowsAsync<LuaRuntimeException>(async () =>
+            await s.DoStringAsync("return string.dump(print)").AsTask());
+    }
+
+    [Test]
+    public async Task Load_BinaryChunk_RejectedWhenModeIsTextOnly()
+    {
+        var r = await CreateState().DoStringAsync(@"
+            local b = string.dump(function() return 42 end)
+            local f, err = load(b, 'chunk', 't')
+            return f, err
+        ");
+        Assert.That(r[0].Type, Is.EqualTo(LuaValueType.Nil));
+        Assert.That(r[1].Read<string>(), Does.Contain("binary"));
+    }
+
+    // --- os.execute ----------------------------------------------------------------
+
+    [Test]
+    public async Task OsExecute_NoArgument_ReturnsTrue()
+    {
+        var r = await CreateState().DoStringAsync("return os.execute()");
+        Assert.That(r[0].Read<bool>(), Is.True);
+    }
+
+    [Test]
+    public async Task OsExecute_TrueCommand_ReturnsExitZero()
+    {
+        // POSIX-only command. Skip on Windows; the smoke is enough on Linux/macOS.
+        if (System.Runtime.InteropServices.RuntimeInformation
+            .IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
+        {
+            Assert.Pass("Skipped on Windows");
+            return;
+        }
+        var r = await CreateState().DoStringAsync("return os.execute('true')");
+        Assert.That(r[0].Read<bool>(), Is.True);
+        Assert.That(r[1].Read<string>(), Is.EqualTo("exit"));
+        Assert.That(r[2].Read<long>(), Is.EqualTo(0L));
+    }
+
+    [Test]
+    public async Task OsExecute_NonZeroExit_ReturnsNilWithCode()
+    {
+        if (System.Runtime.InteropServices.RuntimeInformation
+            .IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
+        {
+            Assert.Pass("Skipped on Windows");
+            return;
+        }
+        var r = await CreateState().DoStringAsync("return os.execute('exit 7')");
+        Assert.That(r[0].Type, Is.EqualTo(LuaValueType.Nil));
+        Assert.That(r[1].Read<string>(), Is.EqualTo("exit"));
+        Assert.That(r[2].Read<long>(), Is.EqualTo(7L));
+    }
 }

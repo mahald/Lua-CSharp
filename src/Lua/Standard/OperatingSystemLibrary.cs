@@ -96,15 +96,51 @@ public sealed class OperatingSystemLibrary
 
     public ValueTask<int> Execute(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
     {
-        // os.execute(command) is not supported
-
-        if (context.HasArgument(0))
+        // Lua 5.3 os.execute([command]):
+        //   - With no command, returns true if a shell is available, false otherwise.
+        //   - With a command, runs it and returns: (true|nil, "exit"|"signal", code).
+        if (!context.HasArgument(0))
         {
-            throw new NotSupportedException("os.execute(command) is not supported");
+            return new(context.Return(true));
         }
-        else
+
+        var command = context.GetArgument<string>(0);
+        var isWindows = System.Runtime.InteropServices.RuntimeInformation
+            .IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows);
+        var shell = isWindows ? "cmd.exe" : "/bin/sh";
+        var shellArg = isWindows ? "/c " + command : "-c \"" + command.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+
+        var psi = new System.Diagnostics.ProcessStartInfo
         {
-            return new(context.Return(false));
+            FileName = shell,
+            Arguments = shellArg,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = false,
+            RedirectStandardError = false,
+        };
+
+        try
+        {
+            using var process = System.Diagnostics.Process.Start(psi);
+            if (process == null)
+            {
+                return new(context.Return(LuaValue.Nil, "exit", -1L));
+            }
+            process.WaitForExit();
+            // .NET on POSIX exposes the WIFSIGNALED case as a negative ExitCode in some configs;
+            // we expose the raw code as "exit" since C# Process abstracts away the signal-vs-exit
+            // distinction. This matches the spirit of Lua's API on platforms without WIFSIGNALED.
+            var code = process.ExitCode;
+            if (code == 0)
+            {
+                return new(context.Return(true, "exit", 0L));
+            }
+            return new(context.Return(LuaValue.Nil, "exit", (long)code));
+        }
+        catch (Exception)
+        {
+            return new(context.Return(LuaValue.Nil, "exit", -1L));
         }
     }
 
