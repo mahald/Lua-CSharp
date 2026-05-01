@@ -22,6 +22,25 @@ public class LuaTests
         return string.Join("\n", lines);
     }
 
+    // Patches the Lua 5.2 vendored math.lua to remove uses of functions deleted in Lua 5.3
+    // (atan2, cosh/sinh/tanh, frexp/ldexp). Equivalents using 5.3 surface area are used instead.
+    static string PatchMathLuaFor53(string source)
+    {
+        return source
+            .Replace("math.atan2(1, 0)", "math.atan(1, 0)")
+            .Replace("local v, e = math.frexp(math.pi)", "local v, e = math.pi, 0")
+            .Replace("assert(eq(math.ldexp(v, e), math.pi))", "assert(eq(v * 2^e, math.pi))")
+            .Replace(
+                "assert(eq(math.tanh(3.5), math.sinh(3.5) / math.cosh(3.5)))",
+                "-- removed: math.tanh/sinh/cosh deleted in Lua 5.3");
+    }
+
+    // Patches tests-lua/nextvar.lua's single math.pow() use (line 285) to use the ^ operator.
+    static string PatchNextVarLuaFor53(string source)
+    {
+        return source.Replace("math.pow(2,i)", "(2^i)");
+    }
+
     [Test]
     [Parallelizable(ParallelScope.All)]
     [TestCase("tests-lua/code.lua")]
@@ -65,6 +84,18 @@ public class LuaTests
                 // original Lua test file stays untouched on disk.
                 var sourceBytes = await File.ReadAllBytesAsync(path);
                 var source = PatchFilesLuaSource(Encoding.Latin1.GetString(sourceBytes));
+                var closure = state.Load(source, "@" + Path.GetFileName(file));
+                await state.ExecuteAsync(closure);
+            }
+            else if (file == "tests-lua/math.lua")
+            {
+                var source = PatchMathLuaFor53(await File.ReadAllTextAsync(path));
+                var closure = state.Load(source, "@" + Path.GetFileName(file));
+                await state.ExecuteAsync(closure);
+            }
+            else if (file == "tests-lua/nextvar.lua")
+            {
+                var source = PatchNextVarLuaFor53(await File.ReadAllTextAsync(path));
                 var closure = state.Load(source, "@" + Path.GetFileName(file));
                 await state.ExecuteAsync(closure);
             }

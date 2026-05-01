@@ -13,30 +13,23 @@ public sealed class MathematicsLibrary
             new(libraryName, "abs", Abs),
             new(libraryName, "acos", Acos),
             new(libraryName, "asin", Asin),
-            new(libraryName, "atan2", Atan2),
             new(libraryName, "atan", Atan),
             new(libraryName, "ceil", Ceil),
             new(libraryName, "cos", Cos),
-            new(libraryName, "cosh", Cosh),
             new(libraryName, "deg", Deg),
             new(libraryName, "exp", Exp),
             new(libraryName, "floor", Floor),
             new(libraryName, "fmod", Fmod),
-            new(libraryName, "frexp", Frexp),
-            new(libraryName, "ldexp", Ldexp),
             new(libraryName, "log", Log),
             new(libraryName, "max", Max),
             new(libraryName, "min", Min),
             new(libraryName, "modf", Modf),
-            new(libraryName, "pow", Pow),
             new(libraryName, "rad", Rad),
             new(libraryName, "random", Random),
             new(libraryName, "randomseed", RandomSeed),
             new(libraryName, "sin", Sin),
-            new(libraryName, "sinh", Sinh),
             new(libraryName, "sqrt", Sqrt),
             new(libraryName, "tan", Tan),
-            new(libraryName, "tanh", Tanh),
             new(libraryName, "type", Type),
             new(libraryName, "tointeger", ToInteger),
             new(libraryName, "ult", Ult)
@@ -107,14 +100,6 @@ public sealed class MathematicsLibrary
         return new(context.Return(Math.Asin(arg0)));
     }
 
-    public ValueTask<int> Atan2(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
-    {
-        var arg0 = context.GetArgument<double>(0);
-        var arg1 = context.GetArgument<double>(1);
-
-        return new(context.Return(Math.Atan2(arg0, arg1)));
-    }
-
     public ValueTask<int> Atan(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
     {
         // Lua 5.3: math.atan(y[, x]) — 1-arg behaves like atan; 2-arg like atan2.
@@ -137,12 +122,6 @@ public sealed class MathematicsLibrary
     {
         var arg0 = context.GetArgument<double>(0);
         return new(context.Return(Math.Cos(arg0)));
-    }
-
-    public ValueTask<int> Cosh(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
-    {
-        var arg0 = context.GetArgument<double>(0);
-        return new(context.Return(Math.Cosh(arg0)));
     }
 
     public ValueTask<int> Deg(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
@@ -168,22 +147,6 @@ public sealed class MathematicsLibrary
         var arg0 = context.GetArgument<double>(0);
         var arg1 = context.GetArgument<double>(1);
         return new(context.Return(arg0 % arg1));
-    }
-
-    public ValueTask<int> Frexp(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
-    {
-        var arg0 = context.GetArgument<double>(0);
-
-        var (m, e) = MathEx.Frexp(arg0);
-        return new(context.Return(m, e));
-    }
-
-    public ValueTask<int> Ldexp(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
-    {
-        var arg0 = context.GetArgument<double>(0);
-        var arg1 = context.GetArgument<double>(1);
-
-        return new(context.Return(arg0 * Math.Pow(2, arg1)));
     }
 
     public ValueTask<int> Log(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
@@ -228,14 +191,6 @@ public sealed class MathematicsLibrary
         var arg0 = context.GetArgument<double>(0);
         var (i, f) = MathEx.Modf(arg0);
         return new(context.Return(i, f));
-    }
-
-    public ValueTask<int> Pow(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
-    {
-        var arg0 = context.GetArgument<double>(0);
-        var arg1 = context.GetArgument<double>(1);
-
-        return new(context.Return(Math.Pow(arg0, arg1)));
     }
 
     public ValueTask<int> Rad(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
@@ -290,12 +245,6 @@ public sealed class MathematicsLibrary
         return new(context.Return(Math.Sin(arg0)));
     }
 
-    public ValueTask<int> Sinh(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
-    {
-        var arg0 = context.GetArgument<double>(0);
-        return new(context.Return(Math.Sinh(arg0)));
-    }
-
     public ValueTask<int> Sqrt(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
     {
         var arg0 = context.GetArgument<double>(0);
@@ -306,11 +255,5 @@ public sealed class MathematicsLibrary
     {
         var arg0 = context.GetArgument<double>(0);
         return new(context.Return(Math.Tan(arg0)));
-    }
-
-    public ValueTask<int> Tanh(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
-    {
-        var arg0 = context.GetArgument<double>(0);
-        return new(context.Return(Math.Tanh(arg0)));
     }
 }

@@ -407,4 +407,20 @@ public class Lua53FeaturesTests
         var r = await CreateState().DoStringAsync("return math.type(-1)");
         Assert.That(r[0].Read<string>(), Is.EqualTo("integer"));
     }
+
+    // --- Strict 5.3: dropped math functions are not callable ------------------------
+
+    [TestCase("math.atan2")]
+    [TestCase("math.cosh")]
+    [TestCase("math.sinh")]
+    [TestCase("math.tanh")]
+    [TestCase("math.frexp")]
+    [TestCase("math.ldexp")]
+    [TestCase("math.pow")]
+    public async Task DeprecatedMathFunctions_AreRemoved(string name)
+    {
+        var r = await CreateState().DoStringAsync($"return type({name})");
+        Assert.That(r[0].Read<string>(), Is.EqualTo("nil"),
+            $"{name} must not be present in Lua 5.3 (it was removed).");
+    }
 }
