@@ -467,6 +467,13 @@ func createAx(op opCode, a int) instruction { return instruction(op)<<posOp | in
         OpMode(0, 1, OpArgK, OpArgK, IABC),  // opMod
         OpMode(0, 1, OpArgK, OpArgK, IABC),  // opPow
         OpMode(0, 1, OpArgR, OpArgN, IABC),  // opUnaryMinus
+        OpMode(0, 1, OpArgK, OpArgK, IABC),  // opIDiv
+        OpMode(0, 1, OpArgK, OpArgK, IABC),  // opBand
+        OpMode(0, 1, OpArgK, OpArgK, IABC),  // opBor
+        OpMode(0, 1, OpArgK, OpArgK, IABC),  // opBxor
+        OpMode(0, 1, OpArgK, OpArgK, IABC),  // opShl
+        OpMode(0, 1, OpArgK, OpArgK, IABC),  // opShr
+        OpMode(0, 1, OpArgR, OpArgN, IABC),  // opBnot
         OpMode(0, 1, OpArgR, OpArgN, IABC),  // opNot
         OpMode(0, 1, OpArgR, OpArgN, IABC),  // opLength
         OpMode(0, 1, OpArgR, OpArgR, IABC),  // opConcat

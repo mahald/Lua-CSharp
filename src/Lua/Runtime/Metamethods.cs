@@ -12,6 +12,13 @@ public static class Metamethods
     public const string Mod = "__mod";
     public const string Pow = "__pow";
     public const string Unm = "__unm";
+    public const string IDiv = "__idiv";
+    public const string Band = "__band";
+    public const string Bor = "__bor";
+    public const string Bxor = "__bxor";
+    public const string Bnot = "__bnot";
+    public const string Shl = "__shl";
+    public const string Shr = "__shr";
     public const string Len = "__len";
     public const string Eq = "__eq";
     public const string Lt = "__lt";
@@ -35,6 +42,13 @@ public static class Metamethods
             OpCode.Mod => (Mod, "mod"),
             OpCode.Pow => (Pow, "pow"),
             OpCode.Unm => (Unm, "unm"),
+            OpCode.IDiv => (IDiv, "idiv"),
+            OpCode.Band => (Band, "band"),
+            OpCode.Bor => (Bor, "bor"),
+            OpCode.Bxor => (Bxor, "bxor"),
+            OpCode.Bnot => (Bnot, "bnot"),
+            OpCode.Shl => (Shl, "shl"),
+            OpCode.Shr => (Shr, "shr"),
             OpCode.Len => (Len, "get length of"),
             OpCode.Eq => (Eq, "eq"),
             OpCode.Lt => (Lt, "lt"),

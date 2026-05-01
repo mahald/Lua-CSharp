@@ -19,8 +19,40 @@ public sealed class TableLibrary
             new(libraryName, "pack", Pack),
             new(libraryName, "remove", Remove),
             new(libraryName, "sort", Sort),
-            new(libraryName, "unpack", Unpack)
+            new(libraryName, "unpack", Unpack),
+            new(libraryName, "move", Move)
         ];
+    }
+
+    public ValueTask<int> Move(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
+    {
+        // table.move(a1, f, e, t [, a2]) — copies a1[f..e] into a2[t..t+(e-f)]; default a2 = a1.
+        var a1 = context.GetArgument<LuaTable>(0);
+        var f = (long)context.GetArgument<double>(1);
+        var e = (long)context.GetArgument<double>(2);
+        var t = (long)context.GetArgument<double>(3);
+        var a2 = context.HasArgument(4) ? context.GetArgument<LuaTable>(4) : a1;
+
+        if (e >= f)
+        {
+            // Choose direction to handle overlap when a1 == a2.
+            if (t > f && ReferenceEquals(a1, a2))
+            {
+                // copy backwards
+                for (var i = e - f; i >= 0; i--)
+                {
+                    a2[t + i] = a1[f + i];
+                }
+            }
+            else
+            {
+                for (long i = 0; i <= e - f; i++)
+                {
+                    a2[t + i] = a1[f + i];
+                }
+            }
+        }
+        return new(context.Return(a2));
     }
 
     public readonly LibraryFunction[] Functions;

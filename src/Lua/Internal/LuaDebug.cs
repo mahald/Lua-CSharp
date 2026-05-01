@@ -701,6 +701,13 @@ readonly struct LuaDebug : IDisposable
         GetOpMode(0, 1, OpArgK, OpArgK, iABC),  /* OP_MOD */
         GetOpMode(0, 1, OpArgK, OpArgK, iABC),  /* OP_POW */
         GetOpMode(0, 1, OpArgR, OpArgN, iABC),  /* OP_UNM */
+        GetOpMode(0, 1, OpArgK, OpArgK, iABC),  /* OP_IDIV */
+        GetOpMode(0, 1, OpArgK, OpArgK, iABC),  /* OP_BAND */
+        GetOpMode(0, 1, OpArgK, OpArgK, iABC),  /* OP_BOR */
+        GetOpMode(0, 1, OpArgK, OpArgK, iABC),  /* OP_BXOR */
+        GetOpMode(0, 1, OpArgK, OpArgK, iABC),  /* OP_SHL */
+        GetOpMode(0, 1, OpArgK, OpArgK, iABC),  /* OP_SHR */
+        GetOpMode(0, 1, OpArgR, OpArgN, iABC),  /* OP_BNOT */
         GetOpMode(0, 1, OpArgR, OpArgN, iABC),  /* OP_NOT */
         GetOpMode(0, 1, OpArgR, OpArgN, iABC),  /* OP_LEN */
         GetOpMode(0, 1, OpArgR, OpArgR, iABC),  /* OP_CONCAT */

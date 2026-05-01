@@ -59,7 +59,10 @@ struct Scanner
     public const int TkLe = TkGe + 1;
     public const int TkNe = TkLe + 1;
     public const int TkDoubleColon = TkNe + 1;
-    public const int TkEos = TkDoubleColon + 1;
+    public const int TkIdiv = TkDoubleColon + 1; // //
+    public const int TkShl = TkIdiv + 1;          // <<
+    public const int TkShr = TkShl + 1;           // >>
+    public const int TkEos = TkShr + 1;
     public const int TkNumber = TkEos + 1;
     public const int TkName = TkNumber + 1;
     public const int TkString = TkName + 1;
@@ -72,7 +75,9 @@ struct Scanner
         "end", "false", "for", "function", "goto", "if",
         "in", "local", "nil", "not", "or", "repeat",
         "return", "then", "true", "until", "while",
-        "..", "...", "==", ">=", "<=", "~=", "::", "<eof>",
+        "..", "...", "==", ">=", "<=", "~=", "::",
+        "//", "<<", ">>",
+        "<eof>",
         "<number>", "<name>", "<string>"
     ];
 
@@ -402,9 +407,11 @@ struct Scanner
             pos++;
             Buffer.Clear();
             var exponent = 0;
+            var sawFraction = false;
             (var fraction, c, var i) = ReadHexNumber(0, ref pos);
             if (c == '.')
             {
+                sawFraction = true;
                 Advance();
                 (fraction, c, exponent) = ReadHexNumber(fraction, ref pos);
             }
@@ -414,9 +421,11 @@ struct Scanner
                 NumberError(startPosition, pos);
             }
 
+            var sawExponent = false;
             exponent *= -4;
             if (c is 'p' or 'P')
             {
+                sawExponent = true;
                 Advance();
                 var negativeExponent = false;
                 c = Current;
@@ -449,18 +458,32 @@ struct Scanner
                 Buffer.Clear();
             }
 
+            // Hex literal is integer iff no fraction part and no exponent: 0xff vs 0xff.0 / 0x1p4
+            if (!sawFraction && !sawExponent)
+            {
+                // fraction here is the parsed integer value as double; only safe for |fraction| < 2^63.
+                // For values that overflow, fall back to float.
+                if (fraction >= -9.2233720368547758e18 && fraction < 9.2233720368547758e18 && Math.Floor(fraction) == fraction)
+                {
+                    return new Token(pos, (long)fraction, RawTokenLength(pos), isInteger: true);
+                }
+            }
             return new(pos, fraction * Math.Pow(2, exponent), RawTokenLength(pos));
         }
 
+        var sawDot = false;
+        var sawExp = false;
         c = ReadDigits();
         if (c == '.')
         {
+            sawDot = true;
             SaveAndAdvance();
             c = ReadDigits();
         }
 
         if (c is 'e' or 'E')
         {
+            sawExp = true;
             SaveAndAdvance();
             c = Current;
             if (c is '+' or '-')
@@ -477,13 +500,23 @@ struct Scanner
             if (strSpan.Length == 1)
             {
                 Buffer.Clear();
-                return new(pos, 0d, RawTokenLength(pos));
+                return new Token(pos, 0L, RawTokenLength(pos), isInteger: true);
             }
 
             while (strSpan.Length > 1 && strSpan[0] == '0' && strSpan[1] == '0')
             {
                 strSpan = strSpan[1..];
             }
+        }
+
+        if (!sawDot && !sawExp)
+        {
+            if (long.TryParse(strSpan, NumberStyles.Integer, CultureInfo.InvariantCulture, out var l))
+            {
+                Buffer.Clear();
+                return new Token(pos, l, RawTokenLength(pos), isInteger: true);
+            }
+            // Out of long range: fall through to double parsing.
         }
 
         if (!double.TryParse(strSpan, NumberStyles.Float, CultureInfo.InvariantCulture, out var f))
@@ -562,6 +595,90 @@ struct Scanner
         return r;
     }
 
+    void ReadUnicodeEscape()
+    {
+        // \u{XXXX} — 1..8 hex digits, codepoint <= 0x7FFFFFFF, encoded as UTF-8 bytes.
+        Advance(); // consume 'u'
+        if (Current != '{')
+        {
+            EscapeError(R.Position - 1, ['u'], "missing '{' in \\u{xxxx}");
+            return;
+        }
+        Advance(); // consume '{'
+
+        long cp = 0;
+        var digits = 0;
+        while (true)
+        {
+            var c = Current;
+            int d;
+            if (c >= '0' && c <= '9') d = c - '0';
+            else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+            else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+            else break;
+            cp = (cp << 4) + d;
+            digits++;
+            if (cp > 0x7FFFFFFF)
+            {
+                EscapeError(R.Position - 1, ['u'], "UTF-8 value too large");
+                return;
+            }
+            Advance();
+        }
+
+        if (digits == 0)
+        {
+            EscapeError(R.Position - 1, ['u'], "hexadecimal digit expected");
+            return;
+        }
+        if (Current != '}')
+        {
+            EscapeError(R.Position - 1, ['u'], "missing '}' in \\u{xxxx}");
+            return;
+        }
+        Advance(); // consume '}'
+
+        // Encode codepoint as UTF-8 bytes into the buffer.
+        var n = (uint)cp;
+        if (n < 0x80) { Save((int)n); return; }
+        if (n < 0x800)
+        {
+            Save((int)(0xC0 | (n >> 6)));
+            Save((int)(0x80 | (n & 0x3F)));
+            return;
+        }
+        if (n < 0x10000)
+        {
+            Save((int)(0xE0 | (n >> 12)));
+            Save((int)(0x80 | ((n >> 6) & 0x3F)));
+            Save((int)(0x80 | (n & 0x3F)));
+            return;
+        }
+        if (n < 0x200000)
+        {
+            Save((int)(0xF0 | (n >> 18)));
+            Save((int)(0x80 | ((n >> 12) & 0x3F)));
+            Save((int)(0x80 | ((n >> 6) & 0x3F)));
+            Save((int)(0x80 | (n & 0x3F)));
+            return;
+        }
+        if (n < 0x4000000)
+        {
+            Save((int)(0xF8 | (n >> 24)));
+            Save((int)(0x80 | ((n >> 18) & 0x3F)));
+            Save((int)(0x80 | ((n >> 12) & 0x3F)));
+            Save((int)(0x80 | ((n >> 6) & 0x3F)));
+            Save((int)(0x80 | (n & 0x3F)));
+            return;
+        }
+        Save((int)(0xFC | (n >> 30)));
+        Save((int)(0x80 | ((n >> 24) & 0x3F)));
+        Save((int)(0x80 | ((n >> 18) & 0x3F)));
+        Save((int)(0x80 | ((n >> 12) & 0x3F)));
+        Save((int)(0x80 | ((n >> 6) & 0x3F)));
+        Save((int)(0x80 | (n & 0x3F)));
+    }
+
     public int ReadDecimalEscape()
     {
         var b = (stackalloc int[3] { 0, 0, 0 });
@@ -618,6 +735,10 @@ struct Scanner
                     else if (c == 'x')
                     {
                         Save(ReadHexEscape());
+                    }
+                    else if (c == 'u')
+                    {
+                        ReadUnicodeEscape();
                     }
                     else if (c == 'z')
                     {
@@ -764,22 +885,44 @@ struct Scanner
                     return new(pos, TkEq);
                 case '<':
                     Advance();
-                    if (Current != '=')
+                    if (Current == '=')
                     {
-                        return new(pos, '<');
+                        Advance();
+                        return new(pos, TkLe);
                     }
-
-                    Advance();
-                    return new(pos, TkLe);
+                    if (Current == '<')
+                    {
+                        Advance();
+                        return new(pos, TkShl);
+                    }
+                    return new(pos, '<');
                 case '>':
                     Advance();
-                    if (Current != '=')
+                    if (Current == '=')
                     {
-                        return new(pos, '>');
+                        Advance();
+                        return new(pos, TkGe);
                     }
-
+                    if (Current == '>')
+                    {
+                        Advance();
+                        return new(pos, TkShr);
+                    }
+                    return new(pos, '>');
+                case '/':
                     Advance();
-                    return new(pos, TkGe);
+                    if (Current == '/')
+                    {
+                        Advance();
+                        return new(pos, TkIdiv);
+                    }
+                    return new(pos, '/');
+                case '&':
+                    Advance();
+                    return new(pos, '&');
+                case '|':
+                    Advance();
+                    return new(pos, '|');
                 case '~':
                     Advance();
                     if (Current != '=')

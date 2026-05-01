@@ -19,18 +19,26 @@ public enum LuaValueType : byte
     Table
 }
 
+internal enum LuaNumberType : byte
+{
+    Float = 0, // default — preserves all-zero == Nil semantics
+    Integer = 1,
+}
+
 [StructLayout(LayoutKind.Auto)]
 public readonly struct LuaValue : IEquatable<LuaValue>
 {
     public static readonly LuaValue Nil = default;
 
     public readonly LuaValueType Type;
+    internal readonly LuaNumberType NumberType; // meaningful only when Type == Number
     readonly double value;
     readonly object? referenceValue;
 
     internal LuaValue(LuaValueType type, double value, object? referenceValue)
     {
         Type = type;
+        NumberType = LuaNumberType.Float;
         this.value = value;
         this.referenceValue = referenceValue;
     }
@@ -49,69 +57,98 @@ public readonly struct LuaValue : IEquatable<LuaValue>
         switch (Type)
         {
             case LuaValueType.Number:
-                if (t == typeof(float))
                 {
-                    var v = (float)value;
-                    result = Unsafe.As<float, T>(ref v);
-                    return true;
-                }
-                else if (t == typeof(double))
-                {
-                    var v = value;
-                    result = Unsafe.As<double, T>(ref v);
-                    return true;
-                }
-                else if (t == typeof(int))
-                {
-                    if (!MathEx.IsInteger(value))
+                    var asDouble = AsDouble();
+                    if (t == typeof(float))
                     {
-                        break;
+                        var v = (float)asDouble;
+                        result = Unsafe.As<float, T>(ref v);
+                        return true;
                     }
-
-                    var v = (int)value;
-                    result = Unsafe.As<int, T>(ref v);
-                    return true;
-                }
-                else if (t == typeof(long))
-                {
-                    if (!MathEx.IsInteger(value))
+                    else if (t == typeof(double))
                     {
-                        break;
+                        var v = asDouble;
+                        result = Unsafe.As<double, T>(ref v);
+                        return true;
                     }
-
-                    var v = (long)value;
-                    result = Unsafe.As<long, T>(ref v);
-                    return true;
-                }
-                else if (t == typeof(uint))
-                {
-                    if (!MathEx.IsInteger(value))
+                    else if (t == typeof(int))
                     {
-                        break;
+                        if (NumberType == LuaNumberType.Integer)
+                        {
+                            var l = UnsafeReadInteger();
+                            if (l < int.MinValue || l > int.MaxValue) break;
+                            var v = (int)l;
+                            result = Unsafe.As<int, T>(ref v);
+                            return true;
+                        }
+                        if (!MathEx.IsInteger(asDouble)) break;
+                        {
+                            var v = (int)asDouble;
+                            result = Unsafe.As<int, T>(ref v);
+                            return true;
+                        }
                     }
-
-                    var v = checked((uint)value);
-                    result = Unsafe.As<uint, T>(ref v);
-                    return true;
-                }
-                else if (t == typeof(ulong))
-                {
-                    if (!MathEx.IsInteger(value))
+                    else if (t == typeof(long))
                     {
-                        break;
+                        if (NumberType == LuaNumberType.Integer)
+                        {
+                            var v = UnsafeReadInteger();
+                            result = Unsafe.As<long, T>(ref v);
+                            return true;
+                        }
+                        if (!MathEx.IsInteger(asDouble)) break;
+                        {
+                            var v = (long)asDouble;
+                            result = Unsafe.As<long, T>(ref v);
+                            return true;
+                        }
                     }
-
-                    var v = checked((ulong)value);
-                    result = Unsafe.As<ulong, T>(ref v);
-                    return true;
-                }
-                else if (t == typeof(object))
-                {
-                    result = (T)(object)value;
-                    return true;
-                }
-                else
-                {
+                    else if (t == typeof(uint))
+                    {
+                        if (NumberType == LuaNumberType.Integer)
+                        {
+                            var l = UnsafeReadInteger();
+                            if (l < 0 || l > uint.MaxValue) break;
+                            var v = (uint)l;
+                            result = Unsafe.As<uint, T>(ref v);
+                            return true;
+                        }
+                        if (!MathEx.IsInteger(asDouble)) break;
+                        {
+                            var v = checked((uint)asDouble);
+                            result = Unsafe.As<uint, T>(ref v);
+                            return true;
+                        }
+                    }
+                    else if (t == typeof(ulong))
+                    {
+                        if (NumberType == LuaNumberType.Integer)
+                        {
+                            var l = UnsafeReadInteger();
+                            if (l < 0) break;
+                            var v = (ulong)l;
+                            result = Unsafe.As<ulong, T>(ref v);
+                            return true;
+                        }
+                        if (!MathEx.IsInteger(asDouble)) break;
+                        {
+                            var v = checked((ulong)asDouble);
+                            result = Unsafe.As<ulong, T>(ref v);
+                            return true;
+                        }
+                    }
+                    else if (t == typeof(object))
+                    {
+                        if (NumberType == LuaNumberType.Integer)
+                        {
+                            result = (T)(object)UnsafeReadInteger();
+                        }
+                        else
+                        {
+                            result = (T)(object)asDouble;
+                        }
+                        return true;
+                    }
                     break;
                 }
             case LuaValueType.Boolean:
@@ -253,11 +290,114 @@ public readonly struct LuaValue : IEquatable<LuaValue>
     {
         if (Type == LuaValueType.Number)
         {
-            result = value;
+            result = AsDouble();
             return true;
         }
 
         result = default!;
+        return false;
+    }
+
+    public bool IsInteger
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => Type == LuaValueType.Number && NumberType == LuaNumberType.Integer;
+    }
+
+    public bool IsFloat
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => Type == LuaValueType.Number && NumberType == LuaNumberType.Float;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal long UnsafeReadInteger()
+    {
+        var v = value;
+        return Unsafe.As<double, long>(ref v);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    double AsDouble()
+    {
+        // Caller must ensure Type == Number.
+        if (NumberType == LuaNumberType.Integer)
+        {
+            return UnsafeReadInteger();
+        }
+        return value;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool TryReadInteger(out long result)
+    {
+        if (Type == LuaValueType.Number)
+        {
+            if (NumberType == LuaNumberType.Integer)
+            {
+                result = UnsafeReadInteger();
+                return true;
+            }
+            // Float subtype: convert if integral and in long range.
+            var d = value;
+            if (!double.IsNaN(d) && !double.IsInfinity(d)
+                && d >= -9.2233720368547758e18 && d < 9.2233720368547758e18
+                && Math.Floor(d) == d)
+            {
+                result = (long)d;
+                return true;
+            }
+        }
+        else if (Type == LuaValueType.String)
+        {
+            return TryParseToInteger(out result);
+        }
+        result = default;
+        return false;
+    }
+
+    public long ReadInteger()
+    {
+        if (!TryReadInteger(out var result))
+        {
+            throw new InvalidOperationException($"Cannot convert LuaValueType.{Type} to integer.");
+        }
+        return result;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    bool TryParseToInteger(out long result)
+    {
+        if (Type != LuaValueType.String)
+        {
+            result = default;
+            return false;
+        }
+        var str = Unsafe.As<string>(referenceValue!);
+        var span = str.AsSpan().Trim();
+        // Hex: 0x...
+        if (span.Length > 2 && (span[0] == '+' || span[0] == '-' || span[0] == '0'))
+        {
+            // Fall through to Int64.TryParse first; handle hex below if that fails.
+        }
+        if (long.TryParse(span, NumberStyles.Integer, CultureInfo.InvariantCulture, out result))
+        {
+            return true;
+        }
+        // Hex (possibly with sign prefix)
+        var sign = 1L;
+        var s = span;
+        if (s.Length > 0 && s[0] == '+') { s = s[1..]; }
+        else if (s.Length > 0 && s[0] == '-') { sign = -1L; s = s[1..]; }
+        if (s.Length > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
+        {
+            if (long.TryParse(s[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var h))
+            {
+                result = unchecked(sign * h);
+                return true;
+            }
+        }
+        result = default;
         return false;
     }
 
@@ -309,7 +449,7 @@ public readonly struct LuaValue : IEquatable<LuaValue>
     {
         if (Type == LuaValueType.Number)
         {
-            result = value;
+            result = AsDouble();
             return true;
         }
 
@@ -321,7 +461,7 @@ public readonly struct LuaValue : IEquatable<LuaValue>
     {
         if (luaValue.Type == LuaValueType.Number)
         {
-            result = luaValue.value;
+            result = luaValue.AsDouble();
             return true;
         }
 
@@ -337,6 +477,12 @@ public readonly struct LuaValue : IEquatable<LuaValue>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal double UnsafeReadDouble()
     {
+        // For Number type with Integer subtype, return the long converted to double.
+        // For Boolean type, value already holds 0/1 as double.
+        if (Type == LuaValueType.Number && NumberType == LuaNumberType.Integer)
+        {
+            return UnsafeReadInteger();
+        }
         return value;
     }
 
@@ -424,7 +570,7 @@ public readonly struct LuaValue : IEquatable<LuaValue>
                 }
             case LuaValueType.Number:
                 {
-                    var v = value;
+                    var v = AsDouble();
                     return Unsafe.As<double, T>(ref v);
                 }
             case LuaValueType.String:
@@ -508,7 +654,16 @@ public readonly struct LuaValue : IEquatable<LuaValue>
     public LuaValue(double value)
     {
         Type = LuaValueType.Number;
+        NumberType = LuaNumberType.Float;
         this.value = value;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public LuaValue(long value)
+    {
+        Type = LuaValueType.Number;
+        NumberType = LuaNumberType.Integer;
+        this.value = Unsafe.As<long, double>(ref value);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -588,7 +743,12 @@ public readonly struct LuaValue : IEquatable<LuaValue>
         return Type switch
         {
             LuaValueType.Nil => 0,
-            LuaValueType.Boolean or LuaValueType.Number => value.GetHashCode(),
+            LuaValueType.Boolean => value.GetHashCode(),
+            // Hash integers via their double representation so int n and float n.0 share buckets.
+            // Large integers (|n| > 2^53) collide with their nearest double; equality check filters mismatches.
+            LuaValueType.Number => NumberType == LuaNumberType.Integer
+                ? ((double)UnsafeReadInteger()).GetHashCode()
+                : value.GetHashCode(),
             LuaValueType.String => Unsafe.As<string>(referenceValue)!.GetHashCode(),
             _ => referenceValue!.GetHashCode()
         };
@@ -597,6 +757,10 @@ public readonly struct LuaValue : IEquatable<LuaValue>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Equals(LuaValue other)
     {
+        if (Type == LuaValueType.Number && other.Type == LuaValueType.Number)
+        {
+            return NumberEquals(this, other);
+        }
         if (other.Type != Type)
         {
             return false;
@@ -605,7 +769,7 @@ public readonly struct LuaValue : IEquatable<LuaValue>
         return Type switch
         {
             LuaValueType.Nil => true,
-            LuaValueType.Boolean or LuaValueType.Number => other.value == value,
+            LuaValueType.Boolean => other.value == value,
             LuaValueType.String => Unsafe.As<string>(other.referenceValue) == Unsafe.As<string>(referenceValue),
             _ => other.referenceValue == referenceValue
         };
@@ -614,12 +778,36 @@ public readonly struct LuaValue : IEquatable<LuaValue>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool EqualsForDict(LuaValue other)
     {
+        if (Type == LuaValueType.Number && other.Type == LuaValueType.Number)
+        {
+            return NumberEquals(this, other);
+        }
         return other.Type == Type && Type switch
         {
-            LuaValueType.Boolean or LuaValueType.Number => other.value == value,
+            LuaValueType.Boolean => other.value == value,
             LuaValueType.String => Unsafe.As<string>(other.referenceValue) == Unsafe.As<string>(referenceValue),
             _ => other.referenceValue == referenceValue
         };
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static bool NumberEquals(in LuaValue a, in LuaValue b)
+    {
+        if (a.NumberType == LuaNumberType.Integer && b.NumberType == LuaNumberType.Integer)
+        {
+            return a.UnsafeReadInteger() == b.UnsafeReadInteger();
+        }
+        if (a.NumberType == LuaNumberType.Float && b.NumberType == LuaNumberType.Float)
+        {
+            return a.value == b.value;
+        }
+        // Mixed: integer n equals float d iff d is integer-valued, in long range, and n == (long)d.
+        long li = a.NumberType == LuaNumberType.Integer ? a.UnsafeReadInteger() : b.UnsafeReadInteger();
+        double f = a.NumberType == LuaNumberType.Float ? a.value : b.value;
+        if (double.IsNaN(f)) return false;
+        if (f < -9.2233720368547758e18 || f >= 9.2233720368547758e18) return false;
+        if (Math.Floor(f) != f) return false;
+        return li == (long)f;
     }
 
     public override bool Equals(object? obj)
@@ -646,7 +834,9 @@ public readonly struct LuaValue : IEquatable<LuaValue>
             LuaValueType.Nil => "nil",
             LuaValueType.Boolean => Read<bool>() ? "true" : "false",
             LuaValueType.String => Read<string>(),
-            LuaValueType.Number => Read<double>().ToString(CultureInfo.InvariantCulture),
+            LuaValueType.Number => NumberType == LuaNumberType.Integer
+                ? UnsafeReadInteger().ToString(CultureInfo.InvariantCulture)
+                : value.ToString(CultureInfo.InvariantCulture),
             LuaValueType.Function => $"function: {referenceValue!.GetHashCode()}",
             LuaValueType.Thread => $"thread: {referenceValue!.GetHashCode()}",
             LuaValueType.Table => $"table: {referenceValue!.GetHashCode()}",

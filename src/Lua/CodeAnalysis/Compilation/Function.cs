@@ -56,7 +56,9 @@ class Function : IPoolNode<Function>
 
     public const int OprLength = 2;
 
-    public const int OprNoUnary = 3;
+    public const int OprBnot = 3;
+
+    public const int OprNoUnary = 4;
     public const int NoJump = -1;
 
     public const int NoRegister = MaxArgA;
@@ -94,7 +96,19 @@ class Function : IPoolNode<Function>
 
     public const int OprOr = 14;
 
-    public const int OprNoBinary = 15;
+    public const int OprIDiv = 15;
+
+    public const int OprBand = 16;
+
+    public const int OprBor = 17;
+
+    public const int OprBxor = 18;
+
+    public const int OprShl = 19;
+
+    public const int OprShr = 20;
+
+    public const int OprNoBinary = 21;
 
     public void OpenFunction(int line)
     {
@@ -682,6 +696,15 @@ class Function : IPoolNode<Function>
         return AddConstant(n, n);
     }
 
+    public int IntegerConstant(long n)
+    {
+        // Integer LuaValue equals same-valued float LuaValue, so a plain integer key would
+        // collide in ConstantLookup. Use a sentinel string key to keep integer constants
+        // in their own dedup namespace.
+        var key = new LuaValue("__int:" + n.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return AddConstant(key, new LuaValue(n));
+    }
+
     public void CheckStack(int n)
     {
         n += FreeRegisterCount;
@@ -817,7 +840,7 @@ class Function : IPoolNode<Function>
                 EncodeConstant(r, e.Info);
                 break;
             case Kind.Number:
-                EncodeConstant(r, NumberConstant(e.Value));
+                EncodeConstant(r, e.IsInteger ? IntegerConstant(e.IntegerValue) : NumberConstant(e.Value));
                 break;
             case Kind.Relocatable:
                 Instruction(e).A = r;
@@ -964,7 +987,7 @@ class Function : IPoolNode<Function>
 
                 break;
             case Kind.Number:
-                e.Info = NumberConstant(e.Value);
+                e.Info = e.IsInteger ? IntegerConstant(e.IntegerValue) : NumberConstant(e.Value);
                 e.Kind = Kind.Constant;
                 goto case Kind.Constant;
             case Kind.Constant:
@@ -1177,14 +1200,114 @@ class Function : IPoolNode<Function>
             return (e1, false);
         }
 
-        if ((op == OpCode.Div || op == OpCode.Mod) && e2.Value == 0.0)
+        if ((op == OpCode.Div || op == OpCode.Mod || op == OpCode.IDiv) && e2.Value == 0.0)
         {
             return (e1, false);
         }
 
-        e1.Value = Arith(op, e1.Value, e2.Value);
+        // Bitwise ops require both to be integer (or float convertible to integer).
+        if (op is OpCode.Band or OpCode.Bor or OpCode.Bxor or OpCode.Shl or OpCode.Shr)
+        {
+            if (!TryFoldToInteger(e1, out var ia) || !TryFoldToInteger(e2, out var ib))
+            {
+                return (e1, false);
+            }
+            long ir = op switch
+            {
+                OpCode.Band => ia & ib,
+                OpCode.Bor => ia | ib,
+                OpCode.Bxor => ia ^ ib,
+                OpCode.Shl => ShiftLeft(ia, ib),
+                OpCode.Shr => ShiftRight(ia, ib),
+                _ => 0
+            };
+            e1.IntegerValue = ir;
+            e1.Value = ir;
+            e1.IsInteger = true;
+            return (e1, true);
+        }
+
+        // IDiv: int//int = int (floor); else float floor.
+        if (op == OpCode.IDiv)
+        {
+            if (e1.IsInteger && e2.IsInteger)
+            {
+                long a = e1.IntegerValue, b = e2.IntegerValue;
+                long q = a / b;
+                if ((a ^ b) < 0 && q * b != a) q--;
+                e1.IntegerValue = q;
+                e1.Value = q;
+                e1.IsInteger = true;
+                return (e1, true);
+            }
+            var v1 = e1.IsInteger ? (double)e1.IntegerValue : e1.Value;
+            var v2 = e2.IsInteger ? (double)e2.IntegerValue : e2.Value;
+            e1.Value = Math.Floor(v1 / v2);
+            e1.IsInteger = false;
+            return (e1, true);
+        }
+
+        // Integer fold for ops that preserve integer type, when both operands are integer.
+        if (e1.IsInteger && e2.IsInteger && op is OpCode.Add or OpCode.Sub or OpCode.Mul or OpCode.Mod)
+        {
+            long a = e1.IntegerValue, b = e2.IntegerValue;
+            long r = op switch
+            {
+                OpCode.Add => unchecked(a + b),
+                OpCode.Sub => unchecked(a - b),
+                OpCode.Mul => unchecked(a * b),
+                OpCode.Mod => FloorMod(a, b),
+                _ => 0
+            };
+            e1.IntegerValue = r;
+            e1.Value = r;
+            e1.IsInteger = true;
+            return (e1, true);
+        }
+
+        // Otherwise fold as float; the result is a float-typed numeric literal.
+        var fv1 = e1.IsInteger ? (double)e1.IntegerValue : e1.Value;
+        var fv2 = e2.IsInteger ? (double)e2.IntegerValue : e2.Value;
+        e1.Value = Arith(op, fv1, fv2);
+        e1.IsInteger = false;
         return (e1, true);
     }
+
+    static bool TryFoldToInteger(ExprDesc e, out long result)
+    {
+        if (e.IsInteger)
+        {
+            result = e.IntegerValue;
+            return true;
+        }
+        var d = e.Value;
+        if (!double.IsNaN(d) && !double.IsInfinity(d)
+            && d >= -9.2233720368547758e18 && d < 9.2233720368547758e18
+            && Math.Floor(d) == d)
+        {
+            result = (long)d;
+            return true;
+        }
+        result = 0;
+        return false;
+    }
+
+    static long FloorMod(long a, long b)
+    {
+        long r = a % b;
+        if (r != 0 && ((r ^ b) < 0)) r += b;
+        return r;
+    }
+
+    static long ShiftLeft(long a, long n)
+    {
+        if (n >= 64) return 0;
+        if (n <= -64) return 0;
+        if (n >= 0) return unchecked((long)((ulong)a << (int)n));
+        return unchecked((long)((ulong)a >> (int)-n));
+    }
+
+    static long ShiftRight(long a, long n) => ShiftLeft(a, -n);
 
     public ExprDesc EncodeArithmetic(OpCode op, ExprDesc e1, ExprDesc e2, int line)
     {
@@ -1226,6 +1349,10 @@ class Function : IPoolNode<Function>
                 if (e.IsNumeral())
                 {
                     e.Value = -e.Value;
+                    if (e.IsInteger)
+                    {
+                        e.IntegerValue = unchecked(-e.IntegerValue);
+                    }
                     return e;
                 }
 
@@ -1234,6 +1361,14 @@ class Function : IPoolNode<Function>
                 return EncodeNot(e);
             case OprLength:
                 return EncodeArithmetic(OpCode.Len, ExpressionToAnyRegister(e), MakeExpression(Kind.Number, 0), line);
+            case OprBnot:
+                if (e.IsNumeral() && e.IsInteger)
+                {
+                    e.IntegerValue = ~e.IntegerValue;
+                    e.Value = e.IntegerValue;
+                    return e;
+                }
+                return EncodeArithmetic(OpCode.Bnot, ExpressionToAnyRegister(e), MakeExpression(Kind.Number, 0), line);
         }
 
         throw new("unreachable");
@@ -1258,6 +1393,12 @@ class Function : IPoolNode<Function>
             case OprDiv:
             case OprMod:
             case OprPow:
+            case OprIDiv:
+            case OprBand:
+            case OprBor:
+            case OprBxor:
+            case OprShl:
+            case OprShr:
                 if (!e.IsNumeral())
                 {
                     (e, _) = ExpressionToRegisterOrConstant(e);
@@ -1318,6 +1459,18 @@ class Function : IPoolNode<Function>
             case OprMod:
             case OprPow:
                 return EncodeArithmetic((OpCode)(op - OprAdd + (byte)OpCode.Add), e1, e2, line);
+            case OprIDiv:
+                return EncodeArithmetic(OpCode.IDiv, e1, e2, line);
+            case OprBand:
+                return EncodeArithmetic(OpCode.Band, e1, e2, line);
+            case OprBor:
+                return EncodeArithmetic(OpCode.Bor, e1, e2, line);
+            case OprBxor:
+                return EncodeArithmetic(OpCode.Bxor, e1, e2, line);
+            case OprShl:
+                return EncodeArithmetic(OpCode.Shl, e1, e2, line);
+            case OprShr:
+                return EncodeArithmetic(OpCode.Shr, e1, e2, line);
             case OprEq:
             case OprLT:
             case OprLE:

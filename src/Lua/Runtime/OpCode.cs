@@ -27,6 +27,13 @@ public enum OpCode : byte
     Mod, // A B C   R(A) := RK(B) % RK(C)
     Pow, // A B C   R(A) := RK(B) ^ RK(C)
     Unm, // A B     R(A) := -R(B)
+    IDiv, // A B C   R(A) := RK(B) // RK(C)  (floor division)
+    Band, // A B C   R(A) := RK(B) & RK(C)
+    Bor, // A B C   R(A) := RK(B) | RK(C)
+    Bxor, // A B C   R(A) := RK(B) ~ RK(C)
+    Shl, // A B C   R(A) := RK(B) << RK(C)
+    Shr, // A B C   R(A) := RK(B) >> RK(C)
+    Bnot, // A B     R(A) := ~R(B)
     Not, // A B     R(A) := not R(B)
     Len, // A B     R(A) := length of R(B)
 

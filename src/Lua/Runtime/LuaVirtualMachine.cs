@@ -547,7 +547,7 @@ public static partial class LuaVirtualMachine
                         vc = ref RKC(ref stackHead, ref constHead, instruction);
 
                         [MethodImpl(MethodImplOptions.NoInlining)]
-                        static double Mod(double a, double b)
+                        static double ModFloat(double a, double b)
                         {
                             var mod = a % b;
                             if ((b > 0 && mod < 0) || (b < 0 && mod > 0))
@@ -558,8 +558,18 @@ public static partial class LuaVirtualMachine
                             return mod;
                         }
 
+                        [MethodImpl(MethodImplOptions.NoInlining)]
+                        static long ModInt(long a, long b)
+                        {
+                            // Lua floor modulo for integers; throws on b == 0 per spec.
+                            if (b == 0) throw new LuaRuntimeException(default, "attempt to perform 'n%%0'");
+                            long r = a % b;
+                            if ((r != 0) && ((r ^ b) < 0)) r += b;
+                            return r;
+                        }
+
                         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-                        static double ArithmeticOperation(OpCode code, double a, double b)
+                        static double ArithmeticOperationFloat(OpCode code, double a, double b)
                         {
                             return code switch
                             {
@@ -567,22 +577,41 @@ public static partial class LuaVirtualMachine
                                 OpCode.Sub => a - b,
                                 OpCode.Mul => a * b,
                                 OpCode.Div => a / b,
-                                OpCode.Mod => Mod(a, b),
+                                OpCode.Mod => ModFloat(a, b),
                                 OpCode.Pow => Math.Pow(a, b),
                                 _ => 0
                             };
                         }
 
+                        // Both operands integer + opcode preserves integer type → integer arithmetic with wrap.
+                        if (vb.IsInteger && vc.IsInteger
+                            && opCode is OpCode.Add or OpCode.Sub or OpCode.Mul or OpCode.Mod)
+                        {
+                            long ia = vb.UnsafeReadInteger();
+                            long ib = vc.UnsafeReadInteger();
+                            long ir = opCode switch
+                            {
+                                OpCode.Add => unchecked(ia + ib),
+                                OpCode.Sub => unchecked(ia - ib),
+                                OpCode.Mul => unchecked(ia * ib),
+                                OpCode.Mod => ModInt(ia, ib),
+                                _ => 0
+                            };
+                            Unsafe.Add(ref stackHead, iA) = new LuaValue(ir);
+                            stack.NotifyTop(iA + frameBase + 1);
+                            continue;
+                        }
+
                         if (vb.Type == LuaValueType.Number && vc.Type == LuaValueType.Number)
                         {
-                            Unsafe.Add(ref stackHead, iA) = ArithmeticOperation(opCode, vb.UnsafeReadDouble(), vc.UnsafeReadDouble());
+                            Unsafe.Add(ref stackHead, iA) = ArithmeticOperationFloat(opCode, vb.UnsafeReadDouble(), vc.UnsafeReadDouble());
                             stack.NotifyTop(iA + frameBase + 1);
                             continue;
                         }
 
                         if (vb.TryReadDouble(out numB) && vc.TryReadDouble(out var numC))
                         {
-                            Unsafe.Add(ref stackHead, iA) = ArithmeticOperation(opCode, numB, numC);
+                            Unsafe.Add(ref stackHead, iA) = ArithmeticOperationFloat(opCode, numB, numC);
                             stack.NotifyTop(iA + frameBase + 1);
                             continue;
                         }
@@ -603,6 +632,14 @@ public static partial class LuaVirtualMachine
                         stackHead = ref stack.FastGet(frameBase);
                         vb = ref Unsafe.Add(ref stackHead, instruction.B);
 
+                        if (vb.IsInteger)
+                        {
+                            ra1 = iA + frameBase + 1;
+                            Unsafe.Add(ref stackHead, iA) = new LuaValue(unchecked(-vb.UnsafeReadInteger()));
+                            stack.NotifyTop(ra1);
+                            continue;
+                        }
+
                         if (vb.TryReadDouble(out numB))
                         {
                             ra1 = iA + frameBase + 1;
@@ -621,6 +658,89 @@ public static partial class LuaVirtualMachine
                             continue;
                         }
 
+                        return true;
+                    case OpCode.IDiv:
+                        stackHead = ref stack.FastGet(frameBase);
+                        vb = ref RKB(ref stackHead, ref constHead, instruction);
+                        vc = ref RKC(ref stackHead, ref constHead, instruction);
+
+                        if (vb.IsInteger && vc.IsInteger)
+                        {
+                            long ia = vb.UnsafeReadInteger();
+                            long ib = vc.UnsafeReadInteger();
+                            if (ib == 0)
+                            {
+                                LuaRuntimeException.AttemptInvalidOperationOnLuaStack(GetstateWithCurrentPc(context), "perform 'n//0'", context.Pc, context.Instruction.B, context.Instruction.C);
+                                return true;
+                            }
+                            long iq = ia / ib;
+                            if ((ia ^ ib) < 0 && iq * ib != ia) iq--;
+                            Unsafe.Add(ref stackHead, iA) = new LuaValue(iq);
+                            stack.NotifyTop(iA + frameBase + 1);
+                            continue;
+                        }
+
+                        if (vb.TryReadDouble(out numB) && vc.TryReadDouble(out numC))
+                        {
+                            Unsafe.Add(ref stackHead, iA) = Math.Floor(numB / numC);
+                            stack.NotifyTop(iA + frameBase + 1);
+                            continue;
+                        }
+
+                        if (ExecuteBinaryOperationMetaMethod(vb, vc, context, opCode, out doRestart))
+                        {
+                            if (doRestart) goto Restart;
+                            continue;
+                        }
+                        return true;
+                    case OpCode.Band:
+                    case OpCode.Bor:
+                    case OpCode.Bxor:
+                    case OpCode.Shl:
+                    case OpCode.Shr:
+                        stackHead = ref stack.FastGet(frameBase);
+                        vb = ref RKB(ref stackHead, ref constHead, instruction);
+                        vc = ref RKC(ref stackHead, ref constHead, instruction);
+
+                        if (TryToInteger(vb, out var bli) && TryToInteger(vc, out var bri))
+                        {
+                            long br = opCode switch
+                            {
+                                OpCode.Band => bli & bri,
+                                OpCode.Bor => bli | bri,
+                                OpCode.Bxor => bli ^ bri,
+                                OpCode.Shl => ShiftLeft64(bli, bri),
+                                OpCode.Shr => ShiftLeft64(bli, -bri),
+                                _ => 0
+                            };
+                            Unsafe.Add(ref stackHead, iA) = new LuaValue(br);
+                            stack.NotifyTop(iA + frameBase + 1);
+                            continue;
+                        }
+
+                        if (ExecuteBinaryOperationMetaMethod(vb, vc, context, opCode, out doRestart))
+                        {
+                            if (doRestart) goto Restart;
+                            continue;
+                        }
+                        return true;
+                    case OpCode.Bnot:
+                        stackHead = ref stack.FastGet(frameBase);
+                        vb = ref Unsafe.Add(ref stackHead, instruction.B);
+
+                        if (TryToInteger(vb, out var unotL))
+                        {
+                            ra1 = iA + frameBase + 1;
+                            Unsafe.Add(ref stackHead, iA) = new LuaValue(~unotL);
+                            stack.NotifyTop(ra1);
+                            continue;
+                        }
+
+                        if (ExecuteUnaryOperationMetaMethod(vb, context, OpCode.Bnot, out doRestart))
+                        {
+                            if (doRestart) goto Restart;
+                            continue;
+                        }
                         return true;
                     case OpCode.Not:
                         Markers.Not();
@@ -2607,5 +2727,31 @@ public static partial class LuaVirtualMachine
             CallerInstructionIndex = context.Pc,
             Flags = CallStackFrameFlags.TailCall
         };
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static bool TryToInteger(in LuaValue v, out long result)
+    {
+        if (v.TryReadInteger(out result)) return true;
+        if (v.TryReadDouble(out var d)
+            && !double.IsNaN(d) && !double.IsInfinity(d)
+            && d >= -9.2233720368547758e18 && d < 9.2233720368547758e18
+            && Math.Floor(d) == d)
+        {
+            result = (long)d;
+            return true;
+        }
+        result = 0;
+        return false;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static long ShiftLeft64(long a, long n)
+    {
+        // Lua 5.3 shift semantics: positive n shifts left, negative shifts right (logical, not arithmetic).
+        // Shifts of 64+ bits in either direction yield 0.
+        if (n >= 64 || n <= -64) return 0;
+        if (n >= 0) return unchecked((long)((ulong)a << (int)n));
+        return unchecked((long)((ulong)a >> (int)-n));
     }
 }

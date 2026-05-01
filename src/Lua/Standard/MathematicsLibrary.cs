@@ -36,8 +36,42 @@ public sealed class MathematicsLibrary
             new(libraryName, "sinh", Sinh),
             new(libraryName, "sqrt", Sqrt),
             new(libraryName, "tan", Tan),
-            new(libraryName, "tanh", Tanh)
+            new(libraryName, "tanh", Tanh),
+            new(libraryName, "type", Type),
+            new(libraryName, "tointeger", ToInteger),
+            new(libraryName, "ult", Ult)
         ];
+    }
+
+    public ValueTask<int> Type(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
+    {
+        var arg = context.GetArgument(0);
+        if (arg.Type != LuaValueType.Number)
+        {
+            return new(context.Return(LuaValue.Nil));
+        }
+        return new(context.Return(arg.IsInteger ? "integer" : "float"));
+    }
+
+    public ValueTask<int> ToInteger(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
+    {
+        var arg = context.GetArgument(0);
+        if (arg.TryReadInteger(out var l))
+        {
+            return new(context.Return(l));
+        }
+        return new(context.Return(LuaValue.Nil));
+    }
+
+    public ValueTask<int> Ult(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
+    {
+        var a = context.GetArgument(0);
+        var b = context.GetArgument(1);
+        if (!a.TryReadInteger(out var ia) || !b.TryReadInteger(out var ib))
+        {
+            throw new LuaRuntimeException(context.State, "bad argument to 'ult' (number has no integer representation)");
+        }
+        return new(context.Return(((ulong)ia) < ((ulong)ib)));
     }
 
     public readonly LibraryFunction[] Functions;
@@ -83,7 +117,13 @@ public sealed class MathematicsLibrary
 
     public ValueTask<int> Atan(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
     {
+        // Lua 5.3: math.atan(y[, x]) — 1-arg behaves like atan; 2-arg like atan2.
         var arg0 = context.GetArgument<double>(0);
+        if (context.HasArgument(1))
+        {
+            var arg1 = context.GetArgument<double>(1);
+            return new(context.Return(Math.Atan2(arg0, arg1)));
+        }
         return new(context.Return(Math.Atan(arg0)));
     }
 

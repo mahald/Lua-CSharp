@@ -308,6 +308,11 @@ class Parser : IPoolNode<Parser>, IDisposable
             case TkNumber:
                 e = MakeExpression(Kind.Number, 0);
                 e.Value = Scanner.Token.N;
+                if (Scanner.Token.IsInteger)
+                {
+                    e.IsInteger = true;
+                    e.IntegerValue = Scanner.Token.I;
+                }
                 break;
             case TkString:
                 e = Function.EncodeString(Scanner.Token.S);
@@ -348,6 +353,7 @@ class Parser : IPoolNode<Parser>, IDisposable
             TkNot => OprNot,
             '-' => OprMinus,
             '#' => OprLength,
+            '~' => OprBnot,
             _ => OprNoUnary
         };
     }
@@ -371,21 +377,35 @@ class Parser : IPoolNode<Parser>, IDisposable
             TkGe => OprGE,
             TkAnd => OprAnd,
             TkOr => OprOr,
+            TkIdiv => OprIDiv,
+            '&' => OprBand,
+            '|' => OprBor,
+            '~' => OprBxor,
+            TkShl => OprShl,
+            TkShr => OprShr,
             _ => OprNoBinary
         };
     }
 
 
+    // Indexed by Opr* constant. Per Lua 5.3 precedence.
     static readonly (int Left, int Right)[] priority =
     [
-        (6, 6), (6, 6), (7, 7), (7, 7), (7, 7),
-        (10, 9), (5, 4),
-        (3, 3), (3, 3), (3, 3),
-        (3, 3), (3, 3), (3, 3),
-        (2, 2), (1, 1)
+        (10, 10), (10, 10),         // OprAdd, OprSub
+        (11, 11), (11, 11), (11, 11), // OprMul, OprDiv, OprMod
+        (14, 13),                   // OprPow (right assoc)
+        (9, 8),                     // OprConcat (right assoc)
+        (3, 3), (3, 3), (3, 3),     // OprEq, OprLT, OprLE
+        (3, 3), (3, 3), (3, 3),     // OprNE, OprGT, OprGE
+        (2, 2), (1, 1),             // OprAnd, OprOr
+        (11, 11),                   // OprIDiv
+        (6, 6),                     // OprBand
+        (4, 4),                     // OprBor
+        (5, 5),                     // OprBxor
+        (7, 7), (7, 7),             // OprShl, OprShr
     ];
 
-    public static int UnaryPriority => 8;
+    public static int UnaryPriority => 12;
 
     public (ExprDesc, int) SubExpression(int limit)
     {

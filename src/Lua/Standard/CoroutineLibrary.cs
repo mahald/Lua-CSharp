@@ -16,8 +16,15 @@ public sealed class CoroutineLibrary
             new(libraryName, "running", Running),
             new(libraryName, "status", Status),
             new(libraryName, "wrap", Wrap),
-            new(libraryName, "yield", Yield)
+            new(libraryName, "yield", Yield),
+            new(libraryName, "isyieldable", IsYieldable)
         ];
+    }
+
+    public ValueTask<int> IsYieldable(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
+    {
+        // A thread is yieldable iff it is not the main thread.
+        return new(context.Return(context.State != context.GlobalState.MainThread));
     }
 
     public readonly LibraryFunction[] Functions;

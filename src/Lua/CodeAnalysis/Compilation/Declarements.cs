@@ -90,6 +90,8 @@ struct ExprDesc
     public int Info;
     public int T, F;
     public double Value;
+    public long IntegerValue;
+    public bool IsInteger;
 
     public readonly bool HasJumps()
     {

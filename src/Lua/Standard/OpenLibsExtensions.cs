@@ -8,7 +8,7 @@ public static class OpenLibsExtensions
     {
         var globalState = state.GlobalState;
         globalState.Environment["_G"] = globalState.Environment;
-        globalState.Environment["_VERSION"] = "Lua 5.2";
+        globalState.Environment["_VERSION"] = "Lua 5.3";
         foreach (var func in BasicLibrary.Instance.Functions)
         {
             globalState.Environment[func.Name] = func;
@@ -78,6 +78,8 @@ public static class OpenLibsExtensions
 
         math["pi"] = Math.PI;
         math["huge"] = double.PositiveInfinity;
+        math["maxinteger"] = new LuaValue(long.MaxValue);
+        math["mininteger"] = new LuaValue(long.MinValue);
 
         globalState.Environment["math"] = math;
         globalState.LoadedModules["math"] = math;
@@ -168,6 +170,19 @@ public static class OpenLibsExtensions
         globalState.LoadedModules["debug"] = debug;
     }
 
+    public static void OpenUtf8Library(this LuaState state)
+    {
+        var globalState = state.GlobalState;
+        LuaTable utf8 = new(0, Utf8Library.Instance.Functions.Length + 1);
+        foreach (var func in Utf8Library.Instance.Functions)
+        {
+            utf8[func.Name] = func.Func;
+        }
+        utf8["charpattern"] = Utf8Library.CharPattern;
+        globalState.Environment["utf8"] = utf8;
+        globalState.LoadedModules["utf8"] = utf8;
+    }
+
     public static void OpenStandardLibraries(this LuaState state)
     {
         state.OpenBasicLibrary();
@@ -180,5 +195,6 @@ public static class OpenLibsExtensions
         state.OpenStringLibrary();
         state.OpenTableLibrary();
         state.OpenDebugLibrary();
+        state.OpenUtf8Library();
     }
 }

@@ -29,8 +29,280 @@ public sealed class StringLibrary
             new(libraryName, "rep", Rep),
             new(libraryName, "reverse", Reverse),
             new(libraryName, "sub", Sub),
-            new(libraryName, "upper", Upper)
+            new(libraryName, "upper", Upper),
+            new(libraryName, "pack", Pack),
+            new(libraryName, "unpack", Unpack),
+            new(libraryName, "packsize", PackSize)
         ];
+    }
+
+    static (bool little, int alignment, int defaultIntSize) ReadFmtPrefix(string fmt, ref int i)
+    {
+        // Defaults: native endianness (we treat as little), no max alignment, default int size = 4.
+        bool little = BitConverter.IsLittleEndian;
+        int align = 1;
+        // Process leading endianness/alignment markers; they may appear anywhere but we read at start.
+        while (i < fmt.Length)
+        {
+            switch (fmt[i])
+            {
+                case '<': little = true; i++; break;
+                case '>': little = false; i++; break;
+                case '=': little = BitConverter.IsLittleEndian; i++; break;
+                case '!':
+                    {
+                        i++;
+                        var n = 0;
+                        while (i < fmt.Length && fmt[i] >= '0' && fmt[i] <= '9') { n = n * 10 + (fmt[i] - '0'); i++; }
+                        if (n == 0) n = 8;
+                        align = n;
+                        break;
+                    }
+                case ' ': i++; break;
+                default: return (little, align, 4);
+            }
+        }
+        return (little, align, 4);
+    }
+
+    static int ReadOptionalSize(string fmt, ref int i, int defaultSize)
+    {
+        if (i < fmt.Length && fmt[i] >= '0' && fmt[i] <= '9')
+        {
+            var n = 0;
+            while (i < fmt.Length && fmt[i] >= '0' && fmt[i] <= '9') { n = n * 10 + (fmt[i] - '0'); i++; }
+            return n;
+        }
+        return defaultSize;
+    }
+
+    static void WriteSignedInt(List<byte> dst, long value, int size, bool little)
+    {
+        Span<byte> tmp = stackalloc byte[8];
+        for (int b = 0; b < 8; b++) tmp[b] = (byte)(value >> (b * 8));
+        if (little) for (var b = 0; b < size; b++) dst.Add(tmp[b]);
+        else for (var b = size - 1; b >= 0; b--) dst.Add(tmp[b]);
+    }
+
+    static long ReadSignedInt(ReadOnlySpan<byte> src, int size, bool little)
+    {
+        ulong v = 0;
+        if (little)
+        {
+            for (var b = 0; b < size; b++) v |= ((ulong)src[b]) << (b * 8);
+        }
+        else
+        {
+            for (var b = 0; b < size; b++) v = (v << 8) | src[b];
+        }
+        // Sign-extend
+        if (size < 8 && (v & (1UL << (size * 8 - 1))) != 0)
+        {
+            v |= ulong.MaxValue << (size * 8);
+        }
+        return unchecked((long)v);
+    }
+
+    static ulong ReadUnsignedInt(ReadOnlySpan<byte> src, int size, bool little)
+    {
+        ulong v = 0;
+        if (little) for (var b = 0; b < size; b++) v |= ((ulong)src[b]) << (b * 8);
+        else for (var b = 0; b < size; b++) v = (v << 8) | src[b];
+        return v;
+    }
+
+    public ValueTask<int> Pack(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
+    {
+        var fmt = context.GetArgument<string>(0);
+        var bytes = new List<byte>();
+        var argIdx = 1;
+        int i = 0;
+        var (little, _, defInt) = ReadFmtPrefix(fmt, ref i);
+        while (i < fmt.Length)
+        {
+            char op = fmt[i++];
+            switch (op)
+            {
+                case '<': little = true; break;
+                case '>': little = false; break;
+                case '=': little = BitConverter.IsLittleEndian; break;
+                case '!': ReadOptionalSize(fmt, ref i, 8); break;
+                case ' ': break;
+                case 'b': WriteSignedInt(bytes, (long)context.GetArgument<double>(argIdx++), 1, little); break;
+                case 'B': WriteSignedInt(bytes, (long)context.GetArgument<double>(argIdx++), 1, little); break;
+                case 'h': WriteSignedInt(bytes, (long)context.GetArgument<double>(argIdx++), 2, little); break;
+                case 'H': WriteSignedInt(bytes, (long)context.GetArgument<double>(argIdx++), 2, little); break;
+                case 'i':
+                case 'I':
+                    {
+                        var sz = ReadOptionalSize(fmt, ref i, defInt);
+                        WriteSignedInt(bytes, (long)context.GetArgument<double>(argIdx++), sz, little);
+                        break;
+                    }
+                case 'l':
+                case 'L':
+                case 'j':
+                case 'J':
+                    WriteSignedInt(bytes, (long)context.GetArgument<double>(argIdx++), 8, little);
+                    break;
+                case 'f':
+                    {
+                        var f = (float)context.GetArgument<double>(argIdx++);
+                        var fb = BitConverter.GetBytes(f);
+                        if (BitConverter.IsLittleEndian != little) Array.Reverse(fb);
+                        bytes.AddRange(fb);
+                        break;
+                    }
+                case 'd':
+                case 'n':
+                    {
+                        var d = context.GetArgument<double>(argIdx++);
+                        var fb = BitConverter.GetBytes(d);
+                        if (BitConverter.IsLittleEndian != little) Array.Reverse(fb);
+                        bytes.AddRange(fb);
+                        break;
+                    }
+                case 'x': bytes.Add(0); break;
+                case 's':
+                    {
+                        var sz = ReadOptionalSize(fmt, ref i, 8);
+                        var s = context.GetArgument<string>(argIdx++);
+                        WriteSignedInt(bytes, s.Length, sz, little);
+                        for (var k = 0; k < s.Length; k++) bytes.Add((byte)s[k]);
+                        break;
+                    }
+                case 'z':
+                    {
+                        var s = context.GetArgument<string>(argIdx++);
+                        for (var k = 0; k < s.Length; k++) bytes.Add((byte)s[k]);
+                        bytes.Add(0);
+                        break;
+                    }
+                default:
+                    throw new LuaRuntimeException(context.State, $"invalid format option '{op}'");
+            }
+        }
+        var ch = new char[bytes.Count];
+        for (var k = 0; k < bytes.Count; k++) ch[k] = (char)bytes[k];
+        return new(context.Return(new string(ch)));
+    }
+
+    public ValueTask<int> PackSize(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
+    {
+        var fmt = context.GetArgument<string>(0);
+        long size = 0;
+        int i = 0;
+        var (_, _, defInt) = ReadFmtPrefix(fmt, ref i);
+        while (i < fmt.Length)
+        {
+            char op = fmt[i++];
+            switch (op)
+            {
+                case '<': case '>': case '=': case ' ': break;
+                case '!': ReadOptionalSize(fmt, ref i, 8); break;
+                case 'b': case 'B': size += 1; break;
+                case 'h': case 'H': size += 2; break;
+                case 'i': case 'I':
+                    size += ReadOptionalSize(fmt, ref i, defInt); break;
+                case 'l': case 'L': case 'j': case 'J': size += 8; break;
+                case 'f': size += 4; break;
+                case 'd': case 'n': size += 8; break;
+                case 'x': size += 1; break;
+                case 's': case 'z':
+                    throw new LuaRuntimeException(context.State, "variable-size format in packsize");
+                default:
+                    throw new LuaRuntimeException(context.State, $"invalid format option '{op}'");
+            }
+        }
+        return new(context.Return(size));
+    }
+
+    public ValueTask<int> Unpack(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
+    {
+        var fmt = context.GetArgument<string>(0);
+        var s = context.GetArgument<string>(1);
+        long startPos = context.HasArgument(2) ? (long)context.GetArgument<double>(2) : 1;
+        var bytes = new byte[s.Length];
+        for (var k = 0; k < s.Length; k++) bytes[k] = (byte)s[k];
+        int idx = (int)(startPos - 1);
+        int fi = 0;
+        var (little, _, defInt) = ReadFmtPrefix(fmt, ref fi);
+        var results = new List<LuaValue>();
+        while (fi < fmt.Length)
+        {
+            char op = fmt[fi++];
+            switch (op)
+            {
+                case '<': little = true; break;
+                case '>': little = false; break;
+                case '=': little = BitConverter.IsLittleEndian; break;
+                case '!': ReadOptionalSize(fmt, ref fi, 8); break;
+                case ' ': break;
+                case 'b': results.Add(new LuaValue(ReadSignedInt(bytes.AsSpan(idx), 1, little))); idx += 1; break;
+                case 'B': results.Add(new LuaValue((long)ReadUnsignedInt(bytes.AsSpan(idx), 1, little))); idx += 1; break;
+                case 'h': results.Add(new LuaValue(ReadSignedInt(bytes.AsSpan(idx), 2, little))); idx += 2; break;
+                case 'H': results.Add(new LuaValue((long)ReadUnsignedInt(bytes.AsSpan(idx), 2, little))); idx += 2; break;
+                case 'i':
+                    {
+                        var sz = ReadOptionalSize(fmt, ref fi, defInt);
+                        results.Add(new LuaValue(ReadSignedInt(bytes.AsSpan(idx), sz, little)));
+                        idx += sz;
+                        break;
+                    }
+                case 'I':
+                    {
+                        var sz = ReadOptionalSize(fmt, ref fi, defInt);
+                        results.Add(new LuaValue((long)ReadUnsignedInt(bytes.AsSpan(idx), sz, little)));
+                        idx += sz;
+                        break;
+                    }
+                case 'l': case 'j': results.Add(new LuaValue(ReadSignedInt(bytes.AsSpan(idx), 8, little))); idx += 8; break;
+                case 'L': case 'J': results.Add(new LuaValue((long)ReadUnsignedInt(bytes.AsSpan(idx), 8, little))); idx += 8; break;
+                case 'f':
+                    {
+                        var fb = bytes.AsSpan(idx, 4).ToArray();
+                        if (BitConverter.IsLittleEndian != little) Array.Reverse(fb);
+                        results.Add(new LuaValue((double)BitConverter.ToSingle(fb, 0)));
+                        idx += 4;
+                        break;
+                    }
+                case 'd':
+                case 'n':
+                    {
+                        var fb = bytes.AsSpan(idx, 8).ToArray();
+                        if (BitConverter.IsLittleEndian != little) Array.Reverse(fb);
+                        results.Add(new LuaValue(BitConverter.ToDouble(fb, 0)));
+                        idx += 8;
+                        break;
+                    }
+                case 'x': idx += 1; break;
+                case 's':
+                    {
+                        var sz = ReadOptionalSize(fmt, ref fi, 8);
+                        long len = ReadSignedInt(bytes.AsSpan(idx), sz, little);
+                        idx += sz;
+                        var sb = new char[len];
+                        for (var k = 0; k < len; k++) sb[k] = (char)bytes[idx + k];
+                        results.Add(new string(sb));
+                        idx += (int)len;
+                        break;
+                    }
+                case 'z':
+                    {
+                        int z = idx;
+                        while (z < bytes.Length && bytes[z] != 0) z++;
+                        var sb = new char[z - idx];
+                        for (var k = 0; k < sb.Length; k++) sb[k] = (char)bytes[idx + k];
+                        results.Add(new string(sb));
+                        idx = z + 1;
+                        break;
+                    }
+                default:
+                    throw new LuaRuntimeException(context.State, $"invalid format option '{op}'");
+            }
+        }
+        results.Add(new LuaValue((long)(idx + 1)));
+        return new(context.Return(results.ToArray()));
     }
 
     public readonly LibraryFunction[] Functions;
