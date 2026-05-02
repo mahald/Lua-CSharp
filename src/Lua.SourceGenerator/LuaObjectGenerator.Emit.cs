@@ -100,25 +100,19 @@ partial class LuaObjectGenerator
                 return false;
             }
 
-            if(!metamethodSet.Contains(LuaObjectMetamethod.Index))
+            if (!TryEmitIndexMetamethod(typeMetadata, builder, references, compilation, context, tempCollections))
             {
-                if (!TryEmitIndexMetamethod(typeMetadata, builder, references, compilation, context, tempCollections))
-                {
-                    return false;
-                }
-
-                metamethodSet.Add(LuaObjectMetamethod.Index);
+                return false;
             }
-           
-            if(!metamethodSet.Contains(LuaObjectMetamethod.NewIndex))
+
+            metamethodSet.Add(LuaObjectMetamethod.Index);
+
+            if (!TryEmitNewIndexMetamethod(typeMetadata, builder, references, compilation, context, tempCollections))
             {
-                if (!TryEmitNewIndexMetamethod(typeMetadata, builder, references, context, tempCollections))
-                {
-                    return false;
-                }
-
-                metamethodSet.Add(LuaObjectMetamethod.NewIndex);
+                return false;
             }
+
+            metamethodSet.Add(LuaObjectMetamethod.NewIndex);
 
             if (!TryEmitMetatable(builder, metamethodSet, context))
             {
@@ -290,17 +284,47 @@ partial class LuaObjectGenerator
         return isValid;
     }
 
+    static MethodMetadata? GetMetamethod(TypeMetadata typeMetadata, LuaObjectMetamethod metamethod)
+    {
+        return typeMetadata.Methods.FirstOrDefault(x => x.HasMetamethodAttribute && x.Metamethod == metamethod);
+    }
+
+    static ITypeSymbol? GetContextArgumentType(MethodMetadata methodMetadata, int contextArgumentIndex)
+    {
+        var parameterIndex = methodMetadata.IsStatic ? contextArgumentIndex : contextArgumentIndex - 1;
+        if (parameterIndex < 0 || parameterIndex >= methodMetadata.Symbol.Parameters.Length)
+        {
+            return null;
+        }
+
+        return methodMetadata.Symbol.Parameters[parameterIndex].Type;
+    }
+
+    static void EmitLuaValueCompatibilityCheck(CodeBuilder builder, string luaValueExpression, ITypeSymbol? typeSymbol, SymbolReferences references)
+    {
+        if (typeSymbol == null || SymbolEqualityComparer.Default.Equals(typeSymbol, references.LuaValue))
+        {
+            builder.Append("true", false);
+            return;
+        }
+
+        builder.Append($"{luaValueExpression}.TryRead<{typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)}>(out _)", false);
+    }
+
     static bool TryEmitIndexMetamethod(TypeMetadata typeMetadata, CodeBuilder builder, SymbolReferences references, Compilation compilation, in SourceProductionContext context, TempCollections tempCollections)
     {
+        var customMetamethod = GetMetamethod(typeMetadata, LuaObjectMetamethod.Index);
+
         builder.AppendLine(@"static readonly global::Lua.LuaFunction __metamethod_index = new global::Lua.LuaFunction(""index"", (context, ct) =>");
 
         using (builder.BeginBlockScope())
         {
-            builder.AppendLine($"var userData = context.GetArgument<{typeMetadata.FullTypeName}>(0);");
-            builder.AppendLine("var key = context.GetArgument<global::System.String>(1);");
-            builder.AppendLine("var result = key switch");
+            builder.AppendLine("var key = context.GetArgument(1);");
+            builder.AppendLine("if (key.TryRead<string>(out var stringKey))");
             using (builder.BeginBlockScope())
             {
+                builder.AppendLine($"var userData = context.GetArgument<{typeMetadata.FullTypeName}>(0);");
+
                 foreach (var propertyMetadata in typeMetadata.Properties)
                 {
                     if (propertyMetadata.IsWriteOnly)
@@ -313,54 +337,62 @@ partial class LuaObjectGenerator
                     var conversionPrefix = GetLuaValuePrefix(propertyMetadata.Type, references, compilation);
                     if (propertyMetadata.IsStatic)
                     {
-                        builder.AppendLine(@$"""{propertyMetadata.LuaMemberName}"" => {conversionPrefix}{typeMetadata.FullTypeName}.{propertyMetadata.Symbol.Name}),");
+                        builder.AppendLine(@$"if (stringKey == ""{propertyMetadata.LuaMemberName}"") return new global::System.Threading.Tasks.ValueTask<int>(context.Return({conversionPrefix}{typeMetadata.FullTypeName}.{propertyMetadata.Symbol.Name})));");
                     }
                     else
                     {
-                        builder.AppendLine(@$"""{propertyMetadata.LuaMemberName}"" => {conversionPrefix}userData.{propertyMetadata.Symbol.Name}),");
+                        builder.AppendLine(@$"if (stringKey == ""{propertyMetadata.LuaMemberName}"") return new global::System.Threading.Tasks.ValueTask<int>(context.Return({conversionPrefix}userData.{propertyMetadata.Symbol.Name})));");
                     }
                 }
 
                 foreach (var methodMetadata in typeMetadata.Methods
                              .Where(x => x.HasMemberAttribute))
                 {
-                    builder.AppendLine(@$"""{methodMetadata.LuaMemberName}"" => new global::Lua.LuaValue(__function_{methodMetadata.LuaMemberName}),");
+                    builder.AppendLine(@$"if (stringKey == ""{methodMetadata.LuaMemberName}"") return new global::System.Threading.Tasks.ValueTask<int>(context.Return(new global::Lua.LuaValue(__function_{methodMetadata.LuaMemberName})));");
                 }
 
-                builder.Append("_ => ");
+                if (tempCollections.InvalidMemberNames.Count > 0)
                 {
-                    if (tempCollections.InvalidMemberNames.Count > 0)
+                    builder.Append("if (stringKey is ", false);
+                    for (var index = 0; index < tempCollections.InvalidMemberNames.Count; index++)
                     {
-                        builder.Append("(key is ", false);
-                        for (var index = 0; index < tempCollections.InvalidMemberNames.Count; index++)
+                        var name = tempCollections.InvalidMemberNames[index];
+                        builder.Append("\"", false);
+                        builder.Append(name, false);
+                        builder.Append("\"", false);
+                        if (index < tempCollections.InvalidMemberNames.Count - 1)
                         {
-                            var name = tempCollections.InvalidMemberNames[index];
-                            builder.Append("\"", false);
-                            builder.Append(name, false);
-                            builder.Append("\"", false);
-                            if (index < tempCollections.InvalidMemberNames.Count - 1)
-                            {
-                                builder.Append(" or ", false);
-                            }
+                            builder.Append(" or ", false);
                         }
-
-                        builder.AppendLine(")", false);
-                        using (builder.BeginIndentScope())
-                        {
-                            builder.AppendLine(@"? throw new global::Lua.LuaRuntimeException(context.State, $""'{key}' cannot be read."")");
-                            builder.AppendLine(": global::Lua.LuaValue.Nil,");
-                        }
-
-                        tempCollections.InvalidMemberNames.Clear();
                     }
-                    else
-                        builder.AppendLine(@"global::Lua.LuaValue.Nil,");
+
+                    builder.AppendLine(")", false);
+                    using (builder.BeginIndentScope())
+                    {
+                        builder.AppendLine(@"throw new global::Lua.LuaRuntimeException(context.State, $""'{stringKey}' cannot be read."");");
+                    }
+
+                    tempCollections.InvalidMemberNames.Clear();
+                }
+
+                if (customMetamethod == null)
+                {
+                    builder.AppendLine("return new global::System.Threading.Tasks.ValueTask<int>(context.Return(global::Lua.LuaValue.Nil));");
                 }
             }
 
-            builder.AppendLine(";");
+            if (customMetamethod != null)
+            {
+                builder.Append("if (");
+                EmitLuaValueCompatibilityCheck(builder, "key", GetContextArgumentType(customMetamethod, 1), references);
+                builder.AppendLine(")", false);
+                using (builder.BeginBlockScope())
+                {
+                    EmitMethodFunctionBody(typeMetadata, customMetamethod, builder, references, compilation);
+                }
+            }
 
-            builder.AppendLine("return new global::System.Threading.Tasks.ValueTask<int>(context.Return(result));");
+            builder.AppendLine("return new global::System.Threading.Tasks.ValueTask<int>(context.Return(global::Lua.LuaValue.Nil));");
         }
 
         builder.AppendLine(");");
@@ -368,18 +400,20 @@ partial class LuaObjectGenerator
         return true;
     }
 
-    static bool TryEmitNewIndexMetamethod(TypeMetadata typeMetadata, CodeBuilder builder, SymbolReferences references, in SourceProductionContext context, TempCollections tempCollections)
+    static bool TryEmitNewIndexMetamethod(TypeMetadata typeMetadata, CodeBuilder builder, SymbolReferences references, Compilation compilation, in SourceProductionContext context, TempCollections tempCollections)
     {
+        var customMetamethod = GetMetamethod(typeMetadata, LuaObjectMetamethod.NewIndex);
+
         builder.AppendLine(@"static readonly global::Lua.LuaFunction __metamethod_newindex = new global::Lua.LuaFunction(""newindex"", (context, ct) =>");
 
         using (builder.BeginBlockScope())
         {
-            builder.AppendLine($"var userData = context.GetArgument<{typeMetadata.FullTypeName}>(0);");
-            builder.AppendLine("var key = context.GetArgument<global::System.String>(1);");
-            builder.AppendLine("switch (key)");
-
+            builder.AppendLine("var key = context.GetArgument(1);");
+            builder.AppendLine("if (key.TryRead<string>(out var stringKey))");
             using (builder.BeginBlockScope())
             {
+                builder.AppendLine($"var userData = context.GetArgument<{typeMetadata.FullTypeName}>(0);");
+
                 foreach (var propertyMetadata in typeMetadata.Properties)
                 {
                     if (propertyMetadata.IsReadOnly)
@@ -388,9 +422,8 @@ partial class LuaObjectGenerator
                         continue;
                     }
 
-                    builder.AppendLine(@$"case ""{propertyMetadata.LuaMemberName}"":");
-
-                    using (builder.BeginIndentScope())
+                    builder.AppendLine(@$"if (stringKey == ""{propertyMetadata.LuaMemberName}"")");
+                    using (builder.BeginBlockScope())
                     {
                         if (propertyMetadata.IsStatic)
                         {
@@ -403,7 +436,7 @@ partial class LuaObjectGenerator
                                 builder.AppendLine($"{typeMetadata.FullTypeName}.{propertyMetadata.Symbol.Name} = context.GetArgument<{propertyMetadata.TypeFullName}>(2);");
                             }
 
-                            builder.AppendLine("break;");
+                            builder.AppendLine("return new global::System.Threading.Tasks.ValueTask<int>(context.Return());");
                         }
                         else
                         {
@@ -416,7 +449,7 @@ partial class LuaObjectGenerator
                                 builder.AppendLine($"userData.{propertyMetadata.Symbol.Name} = context.GetArgument<{propertyMetadata.TypeFullName}>(2);");
                             }
 
-                            builder.AppendLine("break;");
+                            builder.AppendLine("return new global::System.Threading.Tasks.ValueTask<int>(context.Return());");
                         }
                     }
                 }
@@ -427,43 +460,48 @@ partial class LuaObjectGenerator
                     tempCollections.InvalidMemberNames.Add(methodMetadata.LuaMemberName);
                 }
 
-                builder.AppendLine(@"default:");
-
-                using (builder.BeginIndentScope())
+                if (tempCollections.InvalidMemberNames.Count > 0)
                 {
-                    if (tempCollections.InvalidMemberNames.Count > 0)
+                    builder.Append("if (stringKey is ");
+                    for (var index = 0; index < tempCollections.InvalidMemberNames.Count; index++)
                     {
-                        builder.AppendLine("throw new global::Lua.LuaRuntimeException(context.State,");
-                        using (builder.BeginIndentScope())
+                        var name = tempCollections.InvalidMemberNames[index];
+                        builder.Append("\"", false);
+                        builder.Append(name, false);
+                        builder.Append("\"", false);
+                        if (index < tempCollections.InvalidMemberNames.Count - 1)
                         {
-                            builder.Append("(key is ");
-                            for (var index = 0; index < tempCollections.InvalidMemberNames.Count; index++)
-                            {
-                                var name = tempCollections.InvalidMemberNames[index];
-                                builder.Append("\"", false);
-                                builder.Append(name, false);
-                                builder.Append("\"", false);
-                                if (index < tempCollections.InvalidMemberNames.Count - 1)
-                                {
-                                    builder.Append(" or ", false);
-                                }
-                            }
-
-                            builder.AppendLine(")", false);
-                            using (builder.BeginIndentScope())
-                            {
-                                builder.AppendLine(@"? $""'{key}' cannot overwrite.""");
-                                tempCollections.InvalidMemberNames.Clear();
-                                builder.AppendLine(@": $""'{key}' not found."");");
-                            }
+                            builder.Append(" or ", false);
                         }
                     }
-                    else
-                        builder.AppendLine(@"throw new global::Lua.LuaRuntimeException(context.State, $""'{key}' not found."");");
+
+                    builder.AppendLine(")");
+                    using (builder.BeginBlockScope())
+                    {
+                        builder.AppendLine(@"throw new global::Lua.LuaRuntimeException(context.State, $""'{stringKey}' cannot overwrite."");");
+                    }
+
+                    tempCollections.InvalidMemberNames.Clear();
+                }
+
+                if (customMetamethod == null)
+                {
+                    builder.AppendLine(@"throw new global::Lua.LuaRuntimeException(context.State, $""'{stringKey}' not found."");");
                 }
             }
 
-            builder.AppendLine("return new global::System.Threading.Tasks.ValueTask<int>(context.Return());");
+            if (customMetamethod != null)
+            {
+                builder.Append("if (");
+                EmitLuaValueCompatibilityCheck(builder, "key", GetContextArgumentType(customMetamethod, 1), references);
+                builder.AppendLine(")", false);
+                using (builder.BeginBlockScope())
+                {
+                    EmitMethodFunctionBody(typeMetadata, customMetamethod, builder, references, compilation);
+                }
+            }
+
+            builder.AppendLine(@"throw new global::Lua.LuaRuntimeException(context.State, $""'{key}' not found."");");
         }
 
         builder.AppendLine(");");
@@ -502,9 +540,12 @@ partial class LuaObjectGenerator
 
                 if (functionName == null)
                 {
-                    EmitMethodFunction($"__metamethod_{metaMethodName}", metaMethodName, typeMetadata, methodMetadata, builder, references, compilation);
+                    var emittedFunctionName = methodMetadata.Metamethod is LuaObjectMetamethod.Index or LuaObjectMetamethod.NewIndex
+                        ? $"__metamethod_impl_{metaMethodName}"
+                        : $"__metamethod_{metaMethodName}";
+                    EmitMethodFunction(emittedFunctionName, metaMethodName, typeMetadata, methodMetadata, builder, references, compilation);
                 }
-                else
+                else if (methodMetadata.Metamethod is not LuaObjectMetamethod.Index and not LuaObjectMetamethod.NewIndex)
                 {
                     builder.AppendLine($"static global::Lua.LuaFunction __metamethod_{metaMethodName} => {functionName};");
                 }
@@ -520,116 +561,121 @@ partial class LuaObjectGenerator
 
         using (builder.BeginBlockScope())
         {
-            var index = 0;
-
-            if (!methodMetadata.IsStatic)
-            {
-                builder.AppendLine($"var userData = context.GetArgument<{typeMetadata.FullTypeName}>(0);");
-                index++;
-            }
-
-            var hasCancellationToken = false;
-
-            for (var i = 0; i < methodMetadata.Symbol.Parameters.Length; i++)
-            {
-                var parameter = methodMetadata.Symbol.Parameters[i];
-                var parameterType = parameter.Type;
-                var isParameterLuaValue = SymbolEqualityComparer.Default.Equals(parameterType, references.LuaValue);
-
-                if (i == methodMetadata.Symbol.Parameters.Length - 1 && SymbolEqualityComparer.Default.Equals(parameterType, references.CancellationToken))
-                {
-                    hasCancellationToken = true;
-                    break;
-                }
-
-                if (parameter.HasExplicitDefaultValue)
-                {
-                    var syntax = (ParameterSyntax)parameter.DeclaringSyntaxReferences[0].GetSyntax();
-
-                    if (isParameterLuaValue)
-                    {
-                        builder.AppendLine($"var arg{index} = context.HasArgument({index}) ? context.GetArgument({index}) : {syntax.Default!.Value.ToFullString()};");
-                    }
-                    else
-                    {
-                        builder.AppendLine(
-                            $"var arg{index} = context.HasArgument({index}) ?  context.GetArgument<{parameterType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)}>({index}) : {syntax.Default!.Value.ToFullString()};");
-                    }
-                }
-                else
-                {
-                    if (isParameterLuaValue)
-                    {
-                        builder.AppendLine($"var arg{index} = context.GetArgument({index});");
-                    }
-                    else
-                    {
-                        builder.AppendLine($"var arg{index} = context.GetArgument<{parameterType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)}>({index});");
-                    }
-                }
-
-                index++;
-            }
-
-            if (methodMetadata.HasReturnValue)
-            {
-                builder.Append("var result = ");
-            }
-
-            if (methodMetadata.IsAsync)
-            {
-                builder.Append("await ", !methodMetadata.HasReturnValue);
-            }
-
-            if (methodMetadata.IsStatic)
-            {
-                builder.Append($"{typeMetadata.FullTypeName}.{methodMetadata.Symbol.Name}(", !(methodMetadata.HasReturnValue || methodMetadata.IsAsync));
-                builder.Append(string.Join(",", Enumerable.Range(0, index).Select(x => $"arg{x}")), false);
-
-                if (hasCancellationToken)
-                {
-                    builder.Append(index > 0 ? ",ct" : "ct", false);
-                }
-
-                builder.AppendLine(");", false);
-            }
-            else
-            {
-                builder.Append($"userData.{methodMetadata.Symbol.Name}(", !(methodMetadata.HasReturnValue || methodMetadata.IsAsync));
-                builder.Append(string.Join(",", Enumerable.Range(1, index - 1).Select(x => $"arg{x}")), false);
-
-                if (hasCancellationToken)
-                {
-                    builder.Append(index > 1 ? ",ct" : "ct", false);
-                }
-
-                builder.AppendLine(");", false);
-            }
-
-            builder.Append("return ");
-            if (methodMetadata.HasReturnValue)
-            {
-                var returnType = methodMetadata.Symbol.ReturnType;
-                if (methodMetadata.IsAsync)
-                {
-                    var namedType = (INamedTypeSymbol)returnType;
-                    if (namedType.TypeArguments.Length == 1)
-                    {
-                        returnType = namedType.TypeArguments[0];
-                    }
-                }
-
-                var conversionPrefix = GetLuaValuePrefix(returnType, references, compilation);
-                builder.AppendLine(methodMetadata.IsAsync ? $"context.Return({conversionPrefix}result));" : $"new global::System.Threading.Tasks.ValueTask<int>(context.Return({conversionPrefix}result)));", false);
-            }
-            else
-            {
-                builder.AppendLine(methodMetadata.IsAsync ? "context.Return();" : "new global::System.Threading.Tasks.ValueTask<int>(context.Return());", false);
-            }
+            EmitMethodFunctionBody(typeMetadata, methodMetadata, builder, references, compilation);
         }
 
         builder.AppendLine(");");
         builder.AppendLine();
+    }
+
+    static void EmitMethodFunctionBody(TypeMetadata typeMetadata, MethodMetadata methodMetadata, CodeBuilder builder, SymbolReferences references, Compilation compilation)
+    {
+        var index = 0;
+
+        if (!methodMetadata.IsStatic)
+        {
+            builder.AppendLine($"var userData = context.GetArgument<{typeMetadata.FullTypeName}>(0);");
+            index++;
+        }
+
+        var hasCancellationToken = false;
+
+        for (var i = 0; i < methodMetadata.Symbol.Parameters.Length; i++)
+        {
+            var parameter = methodMetadata.Symbol.Parameters[i];
+            var parameterType = parameter.Type;
+            var isParameterLuaValue = SymbolEqualityComparer.Default.Equals(parameterType, references.LuaValue);
+
+            if (i == methodMetadata.Symbol.Parameters.Length - 1 && SymbolEqualityComparer.Default.Equals(parameterType, references.CancellationToken))
+            {
+                hasCancellationToken = true;
+                break;
+            }
+
+            if (parameter.HasExplicitDefaultValue)
+            {
+                var syntax = (ParameterSyntax)parameter.DeclaringSyntaxReferences[0].GetSyntax();
+
+                if (isParameterLuaValue)
+                {
+                    builder.AppendLine($"var arg{index} = context.HasArgument({index}) ? context.GetArgument({index}) : {syntax.Default!.Value.ToFullString()};");
+                }
+                else
+                {
+                    builder.AppendLine(
+                        $"var arg{index} = context.HasArgument({index}) ?  context.GetArgument<{parameterType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)}>({index}) : {syntax.Default!.Value.ToFullString()};");
+                }
+            }
+            else
+            {
+                if (isParameterLuaValue)
+                {
+                    builder.AppendLine($"var arg{index} = context.GetArgument({index});");
+                }
+                else
+                {
+                    builder.AppendLine($"var arg{index} = context.GetArgument<{parameterType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)}>({index});");
+                }
+            }
+
+            index++;
+        }
+
+        if (methodMetadata.HasReturnValue)
+        {
+            builder.Append("var result = ");
+        }
+
+        if (methodMetadata.IsAsync)
+        {
+            builder.Append("await ", !methodMetadata.HasReturnValue);
+        }
+
+        if (methodMetadata.IsStatic)
+        {
+            builder.Append($"{typeMetadata.FullTypeName}.{methodMetadata.Symbol.Name}(", !(methodMetadata.HasReturnValue || methodMetadata.IsAsync));
+            builder.Append(string.Join(",", Enumerable.Range(0, index).Select(x => $"arg{x}")), false);
+
+            if (hasCancellationToken)
+            {
+                builder.Append(index > 0 ? ",ct" : "ct", false);
+            }
+
+            builder.AppendLine(");", false);
+        }
+        else
+        {
+            builder.Append($"userData.{methodMetadata.Symbol.Name}(", !(methodMetadata.HasReturnValue || methodMetadata.IsAsync));
+            builder.Append(string.Join(",", Enumerable.Range(1, index - 1).Select(x => $"arg{x}")), false);
+
+            if (hasCancellationToken)
+            {
+                builder.Append(index > 1 ? ",ct" : "ct", false);
+            }
+
+            builder.AppendLine(");", false);
+        }
+
+        builder.Append("return ");
+        if (methodMetadata.HasReturnValue)
+        {
+            var returnType = methodMetadata.Symbol.ReturnType;
+            if (methodMetadata.IsAsync)
+            {
+                var namedType = (INamedTypeSymbol)returnType;
+                if (namedType.TypeArguments.Length == 1)
+                {
+                    returnType = namedType.TypeArguments[0];
+                }
+            }
+
+            var conversionPrefix = GetLuaValuePrefix(returnType, references, compilation);
+            builder.AppendLine(methodMetadata.IsAsync ? $"context.Return({conversionPrefix}result));" : $"new global::System.Threading.Tasks.ValueTask<int>(context.Return({conversionPrefix}result)));", false);
+        }
+        else
+        {
+            builder.AppendLine(methodMetadata.IsAsync ? "context.Return();" : "new global::System.Threading.Tasks.ValueTask<int>(context.Return());", false);
+        }
     }
 
     static bool TryEmitMetatable(CodeBuilder builder, IEnumerable<LuaObjectMetamethod> metamethods, in SourceProductionContext context)
