@@ -39,6 +39,13 @@ public readonly struct LuaValue : IEquatable<LuaValue>
     {
         var t = typeof(T);
 
+        if (t == typeof(LuaValue))
+        {
+            var v = this;
+            result = Unsafe.As<LuaValue, T>(ref v);
+            return true;
+        }
+
         switch (Type)
         {
             case LuaValueType.Number:
@@ -74,6 +81,28 @@ public readonly struct LuaValue : IEquatable<LuaValue>
 
                     var v = (long)value;
                     result = Unsafe.As<long, T>(ref v);
+                    return true;
+                }
+                else if (t == typeof(uint))
+                {
+                    if (!MathEx.IsInteger(value))
+                    {
+                        break;
+                    }
+
+                    var v = checked((uint)value);
+                    result = Unsafe.As<uint, T>(ref v);
+                    return true;
+                }
+                else if (t == typeof(ulong))
+                {
+                    if (!MathEx.IsInteger(value))
+                    {
+                        break;
+                    }
+
+                    var v = checked((ulong)value);
+                    result = Unsafe.As<ulong, T>(ref v);
                     return true;
                 }
                 else if (t == typeof(object))
@@ -444,6 +473,8 @@ public readonly struct LuaValue : IEquatable<LuaValue>
             ILuaUserData userData => FromUserData(userData),
             int intValue => intValue,
             long longValue => longValue,
+            uint uintValue => uintValue,
+            ulong ulongValue => ulongValue,
             float floatValue => floatValue,
             _ => new(obj)
         };
@@ -649,7 +680,7 @@ public readonly struct LuaValue : IEquatable<LuaValue>
 
     public static bool TryGetLuaValueType(Type type, out LuaValueType result)
     {
-        if (type == typeof(double) || type == typeof(float) || type == typeof(int) || type == typeof(long))
+        if (type == typeof(double) || type == typeof(float) || type == typeof(int) || type == typeof(long) || type == typeof(uint) || type == typeof(ulong))
         {
             result = LuaValueType.Number;
             return true;

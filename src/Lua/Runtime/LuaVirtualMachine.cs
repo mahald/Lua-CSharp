@@ -339,6 +339,11 @@ public static partial class LuaVirtualMachine
 
     internal static ValueTask<int> ExecuteClosureAsync(LuaState state, CancellationToken cancellationToken)
     {
+        if (!RuntimeHelpers.TryEnsureSufficientExecutionStack())
+        {
+            throw new LuaStackOverflowException();
+        }
+
         ref readonly var frame = ref state.GetCurrentFrame();
 
         var context = VirtualMachineExecutionContext.Get(state, in frame,
@@ -2306,7 +2311,7 @@ public static partial class LuaVirtualMachine
             return true;
         }
 
-        if (opCode == OpCode.Le)
+        if (opCode == OpCode.Le && !reverseLe)
         {
             reverseLe = true;
             name = Metamethods.Lt;
@@ -2392,7 +2397,7 @@ public static partial class LuaVirtualMachine
             }
         }
 
-        if (opCode == OpCode.Le)
+        if (opCode == OpCode.Le && !reverseLe)
         {
             reverseLe = true;
             name = Metamethods.Lt;

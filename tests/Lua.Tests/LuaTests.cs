@@ -1,5 +1,6 @@
 using Lua.Standard;
 using Lua.Tests.Helpers;
+using Lua.IO;
 
 namespace Lua.Tests;
 
@@ -13,11 +14,11 @@ public class LuaTests
     [TestCase("tests-lua/locals.lua")]
     [TestCase("tests-lua/literals.lua")]
     //[TestCase("tests-lua/pm.lua")] //string.match is not implemented
-    //[TestCase("tests-lua/sort.lua")] //check for "invalid order function" is not implemented
+    [TestCase("tests-lua/sort.lua")]
     //[TestCase("tests-lua/calls.lua")] //  string.dump and reader function for load chunk is not implemented
     [TestCase("tests-lua/files.lua")]
     [TestCase("tests-lua/closure.lua")]
-    [TestCase("tests-lua/errors.lua")] // get table name  if nil is not implemented
+    [TestCase("tests-lua/errors.lua")]
     [TestCase("tests-lua/events.lua")]
     [TestCase("tests-lua/vararg.lua")]
     [TestCase("tests-lua/nextvar.lua")]
@@ -29,11 +30,16 @@ public class LuaTests
     [TestCase("tests-lua/verybig.lua")]
     public async Task Test_Lua(string file)
     {
-        var state = LuaState.Create();
-        state.Platform = state.Platform with { StandardIO = new TestStandardIO() };
-        state.OpenStandardLibraries();
         var path = FileHelper.GetAbsolutePath(file);
-        Directory.SetCurrentDirectory(Path.GetDirectoryName(path)!);
+        var baseDirectory = Path.GetDirectoryName(path)!;
+        var state = LuaState.Create();
+        state.Platform = state.Platform with
+        {
+            StandardIO = new TestStandardIO(),
+            FileSystem = new FileSystem(baseDirectory)
+        };
+        state.OpenStandardLibraries();
+        if (file == "tests-lua/errors.lua") state.Environment["_soft"] = true;
         try
         {
             await state.DoFileAsync(Path.GetFileName(file));
