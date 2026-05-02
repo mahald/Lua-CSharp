@@ -161,6 +161,30 @@ public partial class IntArrayUserData
     }
 }
 
+[LuaObject]
+public partial class StringKeyUserData
+{
+    readonly Dictionary<string, int> values = new();
+
+    [LuaMember("name")]
+    public string Name => "StringMap";
+
+    [LuaMember("length")]
+    public int Length => values.Count;
+
+    [LuaMetamethod(LuaObjectMetamethod.Index)]
+    public int GetAt(string key)
+    {
+        return values.TryGetValue(key, out var value) ? value : -1;
+    }
+
+    [LuaMetamethod(LuaObjectMetamethod.NewIndex)]
+    public void SetAt(string key, int value)
+    {
+        values[key] = value;
+    }
+}
+
 public class LuaObjectTests
 {
     [Test]
@@ -381,6 +405,51 @@ public class LuaObjectTests
         Assert.That(strResult, Is.EqualTo("IntArray"));
         Assert.That(results[2].TryRead<int>(out result), Is.True);
         Assert.That(result, Is.EqualTo(10));
+    }
+
+    [Test]
+    public async Task Test_StringIndexMetamethod()
+    {
+        var userData = new StringKeyUserData();
+
+        var state = LuaState.Create();
+        state.OpenBasicLibrary();
+        state.Environment["TestObj"] = userData;
+        var results = await state.DoStringAsync("""
+                                                TestObj.answer = 42
+                                                return TestObj.answer, TestObj.name, TestObj.length
+                                                """);
+        Assert.That(results, Has.Length.EqualTo(3));
+        Assert.That(results[0].TryRead<int>(out var result), Is.True);
+        Assert.That(result, Is.EqualTo(42));
+        Assert.That(results[1].TryRead<string>(out var strResult), Is.True);
+        Assert.That(strResult, Is.EqualTo("StringMap"));
+        Assert.That(results[2].TryRead<int>(out result), Is.True);
+        Assert.That(result, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task Test_StringNewIndexMetamethod()
+    {
+        var userData = new StringKeyUserData();
+
+        var state = LuaState.Create();
+        state.OpenBasicLibrary();
+        state.Environment["TestObj"] = userData;
+        var results = await state.DoStringAsync("""
+                                                TestObj.value = 8
+                                                TestObj.other = 13
+                                                return TestObj.value, TestObj.other, TestObj.name, TestObj.length
+                                                """);
+        Assert.That(results, Has.Length.EqualTo(4));
+        Assert.That(results[0].TryRead<int>(out var result), Is.True);
+        Assert.That(result, Is.EqualTo(8));
+        Assert.That(results[1].TryRead<int>(out result), Is.True);
+        Assert.That(result, Is.EqualTo(13));
+        Assert.That(results[2].TryRead<string>(out var strResult), Is.True);
+        Assert.That(strResult, Is.EqualTo("StringMap"));
+        Assert.That(results[3].TryRead<int>(out result), Is.True);
+        Assert.That(result, Is.EqualTo(2));
     }
 
     [Test]
