@@ -331,12 +331,11 @@ partial class LuaObjectGenerator
 
         using (builder.BeginBlockScope())
         {
+            builder.AppendLine($"var userData = context.GetArgument<{typeMetadata.FullTypeName}>(0);");
             builder.AppendLine("var key = context.GetArgument(1);");
             builder.AppendLine("if (key.TryRead<string>(out var stringKey))");
             using (builder.BeginBlockScope())
             {
-                builder.AppendLine($"var userData = context.GetArgument<{typeMetadata.FullTypeName}>(0);");
-
                 foreach (var propertyMetadata in typeMetadata.Properties)
                 {
                     if (propertyMetadata.IsWriteOnly)
@@ -409,7 +408,7 @@ partial class LuaObjectGenerator
                     builder.AppendLine(@">(out var arg1))", false);
                     using (builder.BeginBlockScope())
                     {
-                        EmitMethodFunctionBody(typeMetadata, customMetamethod, builder, references, compilation, new Dictionary<int, string> { [1] = "arg1" });
+                        EmitMethodFunctionBody(typeMetadata, customMetamethod, builder, references, compilation, new Dictionary<int, string> { [1] = "arg1" }, "userData");
                     }
                 }
                 else
@@ -419,7 +418,7 @@ partial class LuaObjectGenerator
                     builder.AppendLine(")", false);
                     using (builder.BeginBlockScope())
                     {
-                        EmitMethodFunctionBody(typeMetadata, customMetamethod, builder, references, compilation);
+                        EmitMethodFunctionBody(typeMetadata, customMetamethod, builder, references, compilation, existingUserDataVariable: "userData");
                     }
                 }
             }
@@ -442,12 +441,11 @@ partial class LuaObjectGenerator
 
         using (builder.BeginBlockScope())
         {
+            builder.AppendLine($"var userData = context.GetArgument<{typeMetadata.FullTypeName}>(0);");
             builder.AppendLine("var key = context.GetArgument(1);");
             builder.AppendLine("if (key.TryRead<string>(out var stringKey))");
             using (builder.BeginBlockScope())
             {
-                builder.AppendLine($"var userData = context.GetArgument<{typeMetadata.FullTypeName}>(0);");
-
                 foreach (var propertyMetadata in typeMetadata.Properties)
                 {
                     if (propertyMetadata.IsReadOnly)
@@ -540,7 +538,7 @@ partial class LuaObjectGenerator
                     builder.AppendLine(@">(out var arg1))", false);
                     using (builder.BeginBlockScope())
                     {
-                        EmitMethodFunctionBody(typeMetadata, customMetamethod, builder, references, compilation, new Dictionary<int, string> { [1] = "arg1" });
+                        EmitMethodFunctionBody(typeMetadata, customMetamethod, builder, references, compilation, new Dictionary<int, string> { [1] = "arg1" }, "userData");
                     }
                 }
                 else
@@ -550,7 +548,7 @@ partial class LuaObjectGenerator
                     builder.AppendLine(")", false);
                     using (builder.BeginBlockScope())
                     {
-                        EmitMethodFunctionBody(typeMetadata, customMetamethod, builder, references, compilation);
+                        EmitMethodFunctionBody(typeMetadata, customMetamethod, builder, references, compilation, existingUserDataVariable: "userData");
                     }
                 }
             }
