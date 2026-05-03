@@ -126,6 +126,65 @@ public partial class TestUserData
     }
 }
 
+[LuaObject]
+public partial class IntArrayUserData
+{
+    public int[] Array { get; } = new int[10];
+
+    public int this[int index]
+    {
+        get => Array[index];
+        set => Array[index] = value;
+    }
+
+    [LuaMember("name")]
+    public string Name => "IntArray";
+
+    [LuaMember("length")]
+    public int Length => Array.Length;
+
+    [LuaMetamethod(LuaObjectMetamethod.Len)]
+
+    public int GetLength() => Array.Length;
+
+
+    [LuaMetamethod(LuaObjectMetamethod.Index)]
+    public int GetAt(int index)
+    {
+        return Array[index];
+    }
+
+    [LuaMetamethod(LuaObjectMetamethod.NewIndex)]
+    public void SetAt(int index, int value)
+    {
+        Array[index] = value;
+    }
+}
+
+[LuaObject]
+public partial class StringKeyUserData
+{
+    readonly Dictionary<string, int> values = new();
+
+    [LuaMember("name")]
+    public string Name => "StringMap";
+
+    [LuaMember("length")]
+    public int Length => values.Count;
+
+    [LuaMetamethod(LuaObjectMetamethod.Index)]
+    public int GetAt(string key)
+    {
+        return values.TryGetValue(key, out var value) ? value : -1;
+    }
+
+    [LuaMetamethod(LuaObjectMetamethod.NewIndex)]
+    public void SetAt(string key, int value)
+    {
+        values[key] = value;
+    }
+}
+
 public class LuaObjectTests
 {
     [Test]
@@ -292,6 +351,105 @@ public class LuaObjectTests
         var objSub = results[1].Read<LuaTestObj>();
         Assert.That(objSub.X, Is.EqualTo(-2));
         Assert.That(objSub.Y, Is.EqualTo(-2));
+    }
+    [Test]
+    public async Task Test_IndexMetamethod()
+    {
+        var userData = new IntArrayUserData();
+
+        userData[0] = 1;
+        userData[1] = 1;
+        userData[2] = 2;
+        userData[3] = 3;
+        userData[4] = 5;
+
+        var state = LuaState.Create();
+        state.OpenBasicLibrary();
+        state.Environment["TestObj"] = userData;
+        var results = await state.DoStringAsync("""
+                                                return TestObj[0], TestObj[1], TestObj[2], TestObj[3], TestObj[4] ,TestObj.name, #TestObj
+                                                """);
+        Assert.That(results, Has.Length.EqualTo(7));
+        Assert.That(results[0].TryRead<int>(out var result), Is.True);
+        Assert.That(result, Is.EqualTo(1));
+        Assert.That(results[1].TryRead<int>(out result), Is.True);
+        Assert.That(result, Is.EqualTo(1));
+        Assert.That(results[2].TryRead<int>(out result), Is.True);
+        Assert.That(result, Is.EqualTo(2));
+        Assert.That(results[3].TryRead<int>(out result), Is.True);
+        Assert.That(result, Is.EqualTo(3));
+        Assert.That(results[4].TryRead<int>(out result), Is.True);
+        Assert.That(result, Is.EqualTo(5));
+        Assert.That(results[5].TryRead<string>(out var strResult), Is.True);
+        Assert.That(strResult, Is.EqualTo("IntArray"));
+        Assert.That(results[6].TryRead<int>(out result), Is.True);
+        Assert.That(result, Is.EqualTo(10));
+    }
+
+    [Test]
+    public async Task Test_NewIndexMetamethod()
+    {
+        var userData = new IntArrayUserData();
+
+        var state = LuaState.Create();
+        state.OpenBasicLibrary();
+        state.Environment["TestObj"] = userData;
+        var results = await state.DoStringAsync("""
+                                                TestObj[2] = 8
+                                                return TestObj[2], TestObj.name, #TestObj
+                                                """);
+        Assert.That(results, Has.Length.EqualTo(3));
+        Assert.That(results[0].TryRead<int>(out var result), Is.True);
+        Assert.That(result, Is.EqualTo(8));
+        Assert.That(results[1].TryRead<string>(out var strResult), Is.True);
+        Assert.That(strResult, Is.EqualTo("IntArray"));
+        Assert.That(results[2].TryRead<int>(out result), Is.True);
+        Assert.That(result, Is.EqualTo(10));
+    }
+
+    [Test]
+    public async Task Test_StringIndexMetamethod()
+    {
+        var userData = new StringKeyUserData();
+
+        var state = LuaState.Create();
+        state.OpenBasicLibrary();
+        state.Environment["TestObj"] = userData;
+        var results = await state.DoStringAsync("""
+                                                TestObj.answer = 42
+                                                return TestObj.answer, TestObj.name, TestObj.length
+                                                """);
+        Assert.That(results, Has.Length.EqualTo(3));
+        Assert.That(results[0].TryRead<int>(out var result), Is.True);
+        Assert.That(result, Is.EqualTo(42));
+        Assert.That(results[1].TryRead<string>(out var strResult), Is.True);
+        Assert.That(strResult, Is.EqualTo("StringMap"));
+        Assert.That(results[2].TryRead<int>(out result), Is.True);
+        Assert.That(result, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task Test_StringNewIndexMetamethod()
+    {
+        var userData = new StringKeyUserData();
+
+        var state = LuaState.Create();
+        state.OpenBasicLibrary();
+        state.Environment["TestObj"] = userData;
+        var results = await state.DoStringAsync("""
+                                                TestObj.value = 8
+                                                TestObj.other = 13
+                                                return TestObj.value, TestObj.other, TestObj.name, TestObj.length
+                                                """);
+        Assert.That(results, Has.Length.EqualTo(4));
+        Assert.That(results[0].TryRead<int>(out var result), Is.True);
+        Assert.That(result, Is.EqualTo(8));
+        Assert.That(results[1].TryRead<int>(out result), Is.True);
+        Assert.That(result, Is.EqualTo(13));
+        Assert.That(results[2].TryRead<string>(out var strResult), Is.True);
+        Assert.That(strResult, Is.EqualTo("StringMap"));
+        Assert.That(results[3].TryRead<int>(out result), Is.True);
+        Assert.That(result, Is.EqualTo(2));
     }
 
     [Test]
